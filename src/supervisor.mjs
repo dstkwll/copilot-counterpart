@@ -1,0 +1,160 @@
+import { randomUUID, createHash } from 'node:crypto';
+
+const terminal = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
+const keptEvents = /^(assistant\.(message|message_delta|usage)|tool\.|session\.(idle|error)|supervisor\.)/;
+
+// Do not forward opaque provider metadata, encrypted reasoning or authentication fields.
+function publicEventData(event) {
+  const data = event.data ?? {};
+  const fields = ['messageId', 'content', 'deltaContent', 'phase', 'toolCallId', 'toolName',
+    'arguments', 'partialOutput', 'progressMessage', 'success', 'aborted', 'message', 'errorType',
+    'model', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'cost'];
+  const result = Object.fromEntries(fields.filter(k => data[k] !== undefined).map(k => [k, data[k]]));
+  if (data.result) result.result = { content: data.result.content, detailedContent: data.result.detailedContent };
+  if (data.error) result.error = { message: data.error.message };
+  return result;
+}
+
+// SDK-independent job state machine. Each job owns a separate runtime.
+export class Supervisor {
+  constructor(factory, { maxActive = 2, maxJobs = 32, maxEvents = 512 } = {}) {
+    this.factory = factory;
+    this.maxActive = maxActive;
+    this.maxJobs = maxJobs;
+    this.maxEvents = maxEvents;
+    this.jobs = new Map();
+    this.closed = false;
+  }
+
+  get(id) {
+    const job = this.jobs.get(id);
+    if (!job) throw new Error('Unknown job ID (jobs belong to this server process).');
+    return job;
+  }
+
+  record(job, type, data = {}) {
+    const encoded = JSON.stringify(data);
+    const payload = encoded.length > 12000
+      ? { truncated: true, preview: encoded.slice(0, 12000) } : data;
+    job.events.push({ cursor: ++job.cursor, type, data: payload, at: new Date().toISOString() });
+    if (job.events.length > this.maxEvents) job.events.shift();
+    for (const wake of job.waiters) wake();
+  }
+
+  snapshot(job) {
+    return { jobId: job.id, status: job.status, model: job.model,
+      sessionId: job.session?.sessionId, cursor: job.cursor,
+      createdAt: job.createdAt, error: job.error, result: job.result,
+      resultTruncated: job.resultTruncated ?? false };
+  }
+
+  list() { return [...this.jobs.values()].map(j => this.snapshot(j)); }
+
+  start({ requestId, prompt, model, timeoutSeconds = 300 }) {
+    if (this.closed) throw new Error('Supervisor is shutting down.');
+    if (!requestId || !prompt || prompt.length > 200000 || !model || timeoutSeconds < 1 || timeoutSeconds > 900)
+      throw new Error('Invalid request: require requestId, model, bounded prompt and timeout (1–900 seconds).');
+    const fingerprint = createHash('sha256').update(JSON.stringify({ prompt, model, timeoutSeconds })).digest('hex');
+    const prior = [...this.jobs.values()].find(j => j.requestId === requestId);
+    if (prior) {
+      if (prior.fingerprint !== fingerprint) throw new Error('requestId already used with different inputs.');
+      return this.snapshot(prior);
+    }
+    if ([...this.jobs.values()].filter(j => !terminal.has(j.status)).length >= this.maxActive)
+      throw new Error('Active job limit reached. Wait or cancel an existing job.');
+    if (this.jobs.size >= this.maxJobs)
+      throw new Error('Job history is full. Forget a finished job before starting another.');
+    const job = { id: randomUUID(), requestId, fingerprint, model, status: 'starting',
+      createdAt: new Date().toISOString(), events: [], cursor: 0, waiters: new Set(), result: '' };
+    this.jobs.set(job.id, job);
+    this.record(job, 'supervisor.started', { model, timeoutSeconds, policy: 'context-only; all tools denied' });
+    job.timer = setTimeout(() => void this.cancel(job.id, 'timed_out'), timeoutSeconds * 1000);
+    job.task = this.run(job, prompt);
+    return this.snapshot(job);
+  }
+
+  async run(job, prompt) {
+    try {
+      job.runtime = this.factory();
+      job.session = await job.runtime.open(job.model, event => {
+        if (terminal.has(job.status)) return;
+        if (keptEvents.test(event.type)) this.record(job, event.type, publicEventData(event));
+        if (event.type === 'assistant.message') {
+          const content = event.data?.content ?? '';
+          job.result = content.slice(0, 100000);
+          job.resultTruncated = content.length > 100000;
+        }
+        if (event.type === 'session.error') this.finish(job, 'failed', event.data?.message ?? 'Session error');
+        if (event.type === 'session.idle') this.finish(job, event.data?.aborted ? 'cancelled' : 'completed');
+      });
+      if (terminal.has(job.status)) return;
+      job.status = 'running';
+      this.record(job, 'supervisor.ready', { sessionId: job.session.sessionId });
+      await job.session.send({ prompt });
+      if (!terminal.has(job.status)) await new Promise(resolve => { job.done = resolve; });
+    } catch (error) {
+      this.finish(job, 'failed', error.message);
+    } finally {
+      clearTimeout(job.timer);
+      await job.runtime?.close().catch(error => this.record(job, 'supervisor.cleanup_error', { message: error.message }));
+    }
+  }
+
+  finish(job, status, error) {
+    if (terminal.has(job.status)) return;
+    job.status = status;
+    job.error = error;
+    clearTimeout(job.timer);
+    this.record(job, 'supervisor.finished', { status, error });
+    job.done?.();
+  }
+
+  async events(id, { after = 0, waitMs = 0, limit = 50 } = {}) {
+    const job = this.get(id);
+    if (!Number.isInteger(after) || after < 0 || after > job.cursor || waitMs < 0 || waitMs > 30000 || limit < 1 || limit > 100)
+      throw new Error('Invalid event cursor, limit or wait duration.');
+    if (job.cursor <= after && !terminal.has(job.status) && waitMs) {
+      await new Promise(resolve => {
+        const wake = () => { clearTimeout(timer); job.waiters.delete(wake); resolve(); };
+        const timer = setTimeout(wake, waitMs);
+        job.waiters.add(wake);
+      });
+    }
+    const events = job.events.filter(e => e.cursor > after).slice(0, limit);
+    return { ...this.snapshot(job), events, nextCursor: events.at(-1)?.cursor ?? after,
+      gap: after < (job.events[0]?.cursor ?? 1) - 1,
+      hasMore: (events.at(-1)?.cursor ?? after) < job.cursor };
+  }
+
+  async steer(id, prompt) {
+    const job = this.get(id);
+    if (job.status !== 'running') throw new Error('Only a running job can be steered.');
+    if (!prompt || prompt.length > 20000) throw new Error('Steering prompt must be 1–20000 characters.');
+    await job.session.send({ prompt, mode: 'immediate' });
+    this.record(job, 'supervisor.steering_sent', { note: 'Best effort before next model request; may queue if turn just ended.' });
+    return this.snapshot(job);
+  }
+
+  async cancel(id, status = 'cancelled') {
+    const job = this.get(id);
+    if (terminal.has(job.status)) return this.snapshot(job);
+    this.finish(job, status);
+    // Stop the dedicated runtime as well, so cancellation covers startup and stuck sends.
+    await job.runtime?.close().catch(error => this.record(job, 'supervisor.cleanup_error', { message: error.message }));
+    return this.snapshot(job);
+  }
+
+  async forget(id) {
+    const job = this.get(id);
+    if (!terminal.has(job.status)) throw new Error('Cancel or finish the job before forgetting it.');
+    await job.task;
+    this.jobs.delete(id);
+    return { forgotten: id, note: 'Removed bridge memory only; SDK-owned session storage is separate.' };
+  }
+
+  async close() {
+    this.closed = true;
+    await Promise.all([...this.jobs.keys()].map(id => this.cancel(id)));
+    await Promise.all([...this.jobs.values()].map(j => j.task));
+  }
+}

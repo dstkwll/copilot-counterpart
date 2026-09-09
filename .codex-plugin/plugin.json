@@ -1,0 +1,18 @@
+{
+  "name": "copilot-supervisor",
+  "version": "0.1.0",
+  "description": "Supervised GitHub Copilot reviews with live events, steering and cancellation.",
+  "author": {
+    "name": "Local developer"
+  },
+  "interface": {
+    "displayName": "Copilot Supervisor",
+    "shortDescription": "Use Copilot Supervisor in Codex.",
+    "longDescription": "Delegate context-only reviews through the official Copilot SDK, inspect progress, steer or cancel. All delegate tools are denied.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Help me use Copilot Supervisor."
+  },
+  "mcpServers": "./.mcp.json"
+}
