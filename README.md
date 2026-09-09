@@ -41,6 +41,16 @@ Open a new Codex thread to pick up the tools. Do not also install the plugin sca
 
 On this machine the server is registered as `copilot-supervisor`, pointing to this source directory and the Node 24 executable. The companion `.mcp.json` also uses machine-local absolute paths; adjust them if moving the project. Updating files here updates the server on its next process start. Remove the registration with `codex mcp remove copilot-supervisor` if no longer wanted.
 
+## Cross-session rollout
+
+The source skill is [copilot-delegation](skills/copilot-delegation/SKILL.md). Install it into the user's Codex skills directory with the bundled skill-installer helper, using this private repository and `--path skills/copilot-delegation`. The installed copy is not automatically updated by git pulls; reinstall/update it deliberately after changes.
+
+Local global `~/.codex/AGENTS.md` guidance tells sessions to consider this skill naturally for meaningful reviews, design sparring and bounded analytical work, honor opt-outs, and show actual start/terminal receipts. This is assistant guidance, not a deterministic hook or background scheduler. Fresh sessions are the acceptance target; existing tasks may need a new turn or restart to load changes. Other machines, accounts and cloud environments need their own setup.
+
+Receipts are assistant commentary based on real tool responses, not server-rendered notifications. Completed inference is distinguished from independently verified findings. The primary assistant remains responsible for verification and authorized implementation.
+
+Verified after the app restart on 2026-09-09: this Codex session discovered and successfully invoked the native supervisor MCP tools.
+
 ## Supervising a task
 
 ### Preferred: automatic routing
