@@ -6,6 +6,8 @@ This is operating guidance, not authorization for unattended scheduled work. Ask
 
 ## Workflow
 
+- Sharing: Send only context the user or project has authorized for their Copilot service; omit secrets and honor project-specific restrictions.
+
 - Read the README and `docs/model-routing.md`; keep actual capabilities and planned capabilities distinct.
 - Preserve the context-only, deny-all tool boundary until isolated editing is separately implemented and verified.
 - Use `copilot_delegate` for a bounded independent review after meaningful changes and passing tests. Use `correctness` for lifecycle/security changes and `sparring` for consequential architecture choices. Supply only relevant source excerpts and test evidence. If the tool is unavailable, use the local MCP/SDK entry point or report the review limitation; never fabricate a review.

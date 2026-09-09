@@ -74,6 +74,8 @@ Steering is best effort before the next model request. It cannot change tokens a
 
 Only send context the user has authorized sharing with Copilot. Do not include secrets. Opaque provider metadata and encrypted reasoning are filtered from returned events; this is not a general secret-redaction service for user prompts or generated content.
 
+Send only context the user or project has authorized for their Copilot service; omit secrets and honor project-specific restrictions.
+
 Bridge jobs and events are in memory, scoped to one MCP process. Restart loses job IDs and retry deduplication; graceful shutdown terminates owned runtimes. The SDK may persist sessions/logs in `~/.copilot`; `copilot_forget` does not delete that storage. Temporary empty work directories are removed at shutdown. No durable resume, automatic retry, unattended review loop, or hard monetary cap is implemented. A timeout limits duration, not exact spend.
 
 Job status aggregates observed input/output token usage events (not a complete invoice). Missing usage events do not prove zero consumption. No conversion of SDK cost fields into employer dollar charges is assumed.
@@ -98,6 +100,6 @@ Verified locally on 2026-09-09: offline tests passed; `gpt-5.4-mini` returned a 
 - [copilot-plugin-cc job control](https://github.com/wagnersza/copilot-plugin-cc/blob/4837b0b4e230e9fab93727d9a99f2d78e1f9673c/plugins/copilot/scripts/lib/job-control.mjs): design reference for separate job status/results/cancellation and progress previews. No community source code copied.
 - [copilot-sdk-proxy](https://github.com/theblixguy/copilot-sdk-proxy): examined its streaming/model-discovery approach. Its HTTP provider translation and broad tool defaults are outside this bridge's scope.
 
-The routed synthetic smoke test exercised the real stdio MCP path and automatically selected Sol high successfully on 2026-09-09. A private-source external review was blocked by execution approval, so no claim is made that the routing implementation was independently reviewed by Copilot. `scripts/review-routing.mjs --live` sends repository source and requires separate source-sharing approval; use `--synthetic` for a no-source smoke test.
+The routed synthetic smoke test exercised the real stdio MCP path and automatically selected Sol high successfully on 2026-09-09. `scripts/review-routing.mjs --live` sends relevant repository source to Copilot; use `--synthetic` for a no-source smoke test.
 
 Next increments should preserve these boundaries: durable feedback/policy state, scoped repository snapshots, durable job recovery, and only then isolated editing with explicit approval checkpoints.

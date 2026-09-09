@@ -6,7 +6,7 @@ Status: automatic model/effort selection implemented for context-only delegation
 
 Keep Astra in Codex as the thinking partner, orchestrator, and final decision-maker. Use the work-funded Copilot subscription for bounded reviews, counterarguments, and eventually implementation. Optimize accepted work and reduced orchestration/repair effort, not simply price per generated token.
 
-Only delegate projects and context authorized for the account's Copilot service. This document does not authorize broader data sharing, unattended spending, or repository writes.
+Send only context the user or project has authorized for their Copilot service; omit secrets and honor project-specific restrictions.
 
 ## Starting roles
 
@@ -80,4 +80,4 @@ Not implemented:
 4. Scoped repository snapshots, then isolated editing worktrees and approval checkpoints.
 5. Measured routing adjustments based on accepted patches, useful findings, false positives, repair effort, latency and consumption.
 
-Start with reviews, sparring and code proposals. Actual implementation remains proposed until file isolation and verification are ready. Automatic routing does not grant any additional tool or data-sharing permissions. External review of this private repository source is awaiting explicit source-sharing approval; a real MCP Sol-high synthetic test has succeeded.
+Start with reviews, sparring and code proposals. Actual implementation remains proposed until file isolation and verification are ready. Automatic routing does not grant additional tool permissions. A real MCP Sol-high synthetic test has succeeded.
