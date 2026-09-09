@@ -46,10 +46,17 @@ export class CopilotRuntime {
   }
 
   async close() {
+    if (this.closePromise) return this.closePromise;
     this.closed = true;
-    this.unsubscribe?.();
-    if (this.client) await this.client.forceStop();
-    await this.cleanup();
+    this.closePromise = (async () => {
+      try {
+        this.unsubscribe?.();
+        if (this.client) await this.client.forceStop();
+      } finally {
+        await this.cleanup();
+      }
+    })();
+    return this.closePromise;
   }
 }
 

@@ -102,4 +102,6 @@ Verified locally on 2026-09-09: offline tests passed; `gpt-5.4-mini` returned a 
 
 The routed synthetic smoke test exercised the real stdio MCP path and automatically selected Sol high successfully on 2026-09-09. `scripts/review-routing.mjs --live` sends relevant repository source to Copilot; use `--synthetic` for a no-source smoke test.
 
+A subsequent Sol-high source review completed and produced two confirmed lifecycle fixes; see [review disposition](docs/review-2026-09-09.md). Runtime slots now remain occupied until cleanup is confirmed, and failed cleanup cannot be forgotten to bypass the limit.
+
 Next increments should preserve these boundaries: durable feedback/policy state, scoped repository snapshots, durable job recovery, and only then isolated editing with explicit approval checkpoints.

@@ -117,3 +117,31 @@ test('deadline terminates job', async () => {
   assert.equal(runtimes[0].closed, true);
   await s.close();
 });
+
+test('completed jobs retain capacity until cleanup is confirmed', async () => {
+  let emit, release;
+  const s = new Supervisor(() => ({
+    open: async (_model, listener) => { emit = listener; return { send: async () => {} }; },
+    close: () => new Promise(resolve => { release = resolve; })
+  }), { maxActive: 1 });
+  const a = s.start({ requestId: 'a', model: 'm', prompt: 'p' }); await tick();
+  emit({ type: 'session.idle', data: {} }); await tick();
+  assert.throws(() => s.start({ requestId: 'b', model: 'm', prompt: 'p' }), /Active/);
+  release(); await s.get(a.jobId).task;
+  assert.equal(s.get(a.jobId).cleanupComplete, true);
+  await s.forget(a.jobId);
+  await s.close();
+});
+
+test('failed cleanup retains capacity and cannot be forgotten', async () => {
+  let emit;
+  const s = new Supervisor(() => ({
+    open: async (_model, listener) => { emit = listener; return { send: async () => {} }; },
+    close: async () => { throw new Error('Stop failed'); }
+  }), { maxActive: 1 });
+  const a = s.start({ requestId: 'a', model: 'm', prompt: 'p' }); await tick();
+  emit({ type: 'session.idle', data: {} }); await tick();
+  assert.throws(() => s.start({ requestId: 'b', model: 'm', prompt: 'p' }), /Active/);
+  await assert.rejects(s.forget(a.jobId), /unconfirmed/);
+  await s.close();
+});

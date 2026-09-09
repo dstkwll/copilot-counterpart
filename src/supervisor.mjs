@@ -61,7 +61,7 @@ export class Supervisor {
       if (prior.fingerprint !== fingerprint) throw new Error('requestId already used with different inputs.');
       return this.snapshot(prior);
     }
-    if ([...this.jobs.values()].filter(j => !terminal.has(j.status)).length >= this.maxActive)
+    if ([...this.jobs.values()].filter(j => !j.cleanupComplete).length >= this.maxActive)
       throw new Error('Active job limit reached. Wait or cancel an existing job.');
     if (this.jobs.size >= this.maxJobs)
       throw new Error('Job history is full. Forget a finished job before starting another.');
@@ -104,7 +104,13 @@ export class Supervisor {
       this.finish(job, 'failed', error.message);
     } finally {
       clearTimeout(job.timer);
-      await job.runtime?.close().catch(error => this.record(job, 'supervisor.cleanup_error', { message: error.message }));
+      try {
+        await job.runtime?.close();
+        job.cleanupComplete = true;
+      } catch (error) {
+        // Fail closed: an unconfirmed runtime shutdown must not free capacity.
+        this.record(job, 'supervisor.cleanup_error', { message: error.message });
+      }
     }
   }
 
@@ -156,6 +162,7 @@ export class Supervisor {
     const job = this.get(id);
     if (!terminal.has(job.status)) throw new Error('Cancel or finish the job before forgetting it.');
     await job.task;
+    if (!job.cleanupComplete) throw new Error('Runtime cleanup is unconfirmed; cannot forget its occupied slot.');
     this.jobs.delete(id);
     return { forgotten: id, note: 'Removed bridge memory only; SDK-owned session storage is separate.' };
   }

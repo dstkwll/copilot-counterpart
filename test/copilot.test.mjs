@@ -37,3 +37,13 @@ test('adapter fails closed if runtime exposes a tool', async () => {
   try { await assert.rejects(runtime.open('test', () => {}), /Safety check/); }
   finally { await runtime.close(); }
 });
+
+test('close is single-flight and cleanup runs even if forceStop rejects', async () => {
+  const runtime = new CopilotRuntime();
+  let stops = 0, cleanups = 0;
+  runtime.client = { forceStop: async () => { stops++; throw new Error('stop failed'); } };
+  runtime.cleanup = async () => { cleanups++; };
+  const results = await Promise.allSettled([runtime.close(), runtime.close()]);
+  assert.ok(results.every(r => r.status === 'rejected'));
+  assert.equal(stops, 1); assert.equal(cleanups, 1);
+});

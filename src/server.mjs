@@ -35,7 +35,7 @@ export function createServer(supervisor = new Supervisor(() => new CopilotRuntim
     jobId, prompt: z.string().min(1).max(20000)
   }, ({ jobId, prompt }) => supervisor.steer(jobId, prompt));
   register('copilot_cancel', 'Cancel a job and terminate its dedicated Copilot runtime. Idempotent; does not undo prior actions.', { jobId }, ({ jobId }) => supervisor.cancel(jobId));
-  register('copilot_forget', 'Discard a finished job from bridge memory. SDK session files are not deleted. This also removes retry deduplication for that requestId.', { jobId }, ({ jobId }) => supervisor.forget(jobId));
+  register('copilot_forget', 'Discard a finished, cleaned-up job from bridge memory. SDK session files are not deleted. Explicit-start deduplication is removed; routed request IDs remain reserved for this process and cannot be reused.', { jobId }, ({ jobId }) => supervisor.forget(jobId));
   return { server, supervisor, router };
 }
 
