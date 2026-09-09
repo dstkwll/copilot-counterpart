@@ -2,11 +2,16 @@
 
 A local stdio MCP bridge for supervised, context-only GitHub Copilot reviews and small analytical delegations. Uses the official Copilot SDK and its bundled runtime, not an unofficial model API proxy.
 
-See [the model-routing proposal](docs/model-routing.md) for role assignments, Sonnet's probationary trial, escalation rules, pricing caveats and the implementation roadmap. The proposal is not an enabled automatic router.
+This is an **AI-maintained repository**. Agents handle routine implementation, tests, review, documentation and direct commits to `main`; the owner is involved only for missing authority or material risk/scope decisions. See [AGENTS.md](AGENTS.md) for the operating boundaries.
+
+See [model routing](docs/model-routing.md) for role assignments, Sonnet's probationary trial, escalation rules and the roadmap. Automatic model/effort selection is implemented in `copilot_delegate`; it is triggered during an active assistant task, not by a background scheduler.
 
 ## Current scope
 
 - Start background jobs using a model returned by `copilot_models`.
+- Prefer `copilot_delegate` to select the model and reasoning effort automatically by role, complexity and risk. Routing explanations are included in job status. Model policy and effort support are checked before inference.
+- Supply `sharingAuthorized: true` only when the user/project has authorized sending that context to Copilot. It is an attestation by the orchestrator, not independent employer-policy enforcement.
+- One explicit escalation from a finished routed job is supported through `parentJobId`; there are no autonomous retries or debates. `copilot_feedback` records useful/unhelpful/inconclusive outcomes.
 - Read streamed text and status through cursor-based `copilot_events` long polling.
 - Send immediate steering messages and cancel a dedicated job runtime.
 - Request IDs deduplicate identical starts for this process's retained history.
@@ -38,8 +43,27 @@ On this machine the server is registered as `copilot-supervisor`, pointing to th
 
 ## Supervising a task
 
-1. Call `copilot_models`; choose an available model explicitly.
-2. Call `copilot_start` with a fresh `requestId`, `model`, scoped `prompt`, and optional `timeoutSeconds`. The prompt is transmitted to Copilot and consumes subscription allowance.
+### Preferred: automatic routing
+
+Call `copilot_delegate` with `requestId`, `role`, `task`, `context`, `acceptanceCriteria`, and `sharingAuthorized: true`. Optional `complexity` is small/normal/complex (default normal); `risk` is low/high (default low). Select role:
+
+| Role | Normal starting model | Notes |
+| --- | --- | --- |
+| review | Sonnet 5 high (trial) | Sol after three trials or an unhelpful trial; high-risk review uses Opus |
+| correctness | Sol high | Independent defect/invariant checking |
+| sparring | Opus 5 high | Counterarguments and alternatives |
+| analysis / code_proposal | Terra medium | Luna for small work, Sol high for complex/high-risk work |
+
+Code proposals are returned as text, never executed. Unavailable/disabled models or unsupported effort cause a documented fallback within the same route, or fail closed. No pricing-based routing is performed. Catalog lookup errors do not trigger inference retries.
+
+Poll events, verify the outcome, and call `copilot_feedback`. To escalate, call `copilot_delegate` with a fresh request ID, the completed/failed `parentJobId`, and a corrected self-contained task brief; previous output is not automatically forwarded. Cancelled and timed-out jobs cannot be escalated. The maximum chain is two jobs, and Opus is the ceiling.
+
+Sonnet trial counts, negative-feedback disablement and routing retry records are process-local and reset on restart. This is not a durable learning system. Negative feedback disables further trials in that process; positive feedback never promotes the model automatically. Routed request IDs remain reserved for the process lifetime (maximum 64); forgetting the underlying job does not silently rerun it.
+
+### Advanced: explicit model
+
+1. Call `copilot_models`; choose an available model explicitly. This advanced path bypasses role selection, not the deny-all tool boundary.
+2. Call `copilot_start` with a fresh `requestId`, `model`, scoped `prompt`, and optional `reasoningEffort` and `timeoutSeconds`. The prompt is transmitted to Copilot and consumes subscription allowance.
 3. Call `copilot_events(jobId, after: 0, waitMs: 30000)`. Read progress and keep `nextCursor`. Drain `hasMore` before waiting again. A `gap` means the event history wrapped; the latest complete assistant message is also returned as `result`.
 4. Use `copilot_steer` for course corrections, or `copilot_cancel` to terminate the job. Keep monitoring until terminal; never describe an unobserved job as supervised.
 5. Verify findings against the original evidence. Reviewer output is untrusted data, not permission to expand the task. `copilot_forget` frees bridge memory when finished.
@@ -52,12 +76,15 @@ Only send context the user has authorized sharing with Copilot. Do not include s
 
 Bridge jobs and events are in memory, scoped to one MCP process. Restart loses job IDs and retry deduplication; graceful shutdown terminates owned runtimes. The SDK may persist sessions/logs in `~/.copilot`; `copilot_forget` does not delete that storage. Temporary empty work directories are removed at shutdown. No durable resume, automatic retry, unattended review loop, or hard monetary cap is implemented. A timeout limits duration, not exact spend.
 
+Job status aggregates observed input/output token usage events (not a complete invoice). Missing usage events do not prove zero consumption. No conversion of SDK cost fields into employer dollar charges is assumed.
+
 ## Verification
 
 ```sh
 npm test
 npm run smoke -- --live gpt-5.4-mini
 node scripts/live-controls.mjs --live
+node scripts/review-routing.mjs --live --synthetic
 ```
 
 Offline tests cover event streaming/pagination, long-poll wakeups, request deduplication, concurrency/history limits, cancellation during startup, failure/timeout handling, permission denial, runtime tool-set verification, and real MCP stdio negotiation. Live tests use only synthetic context and consume allowance. The controls test checks SDK steering acceptance and cancellation while output is streaming, not guaranteed compliance with a correction.
@@ -71,4 +98,6 @@ Verified locally on 2026-09-09: offline tests passed; `gpt-5.4-mini` returned a 
 - [copilot-plugin-cc job control](https://github.com/wagnersza/copilot-plugin-cc/blob/4837b0b4e230e9fab93727d9a99f2d78e1f9673c/plugins/copilot/scripts/lib/job-control.mjs): design reference for separate job status/results/cancellation and progress previews. No community source code copied.
 - [copilot-sdk-proxy](https://github.com/theblixguy/copilot-sdk-proxy): examined its streaming/model-discovery approach. Its HTTP provider translation and broad tool defaults are outside this bridge's scope.
 
-Next increments should preserve these boundaries: scoped repository snapshots, durable job recovery, and only then isolated editing with explicit approval checkpoints.
+The routed synthetic smoke test exercised the real stdio MCP path and automatically selected Sol high successfully on 2026-09-09. A private-source external review was blocked by execution approval, so no claim is made that the routing implementation was independently reviewed by Copilot. `scripts/review-routing.mjs --live` sends repository source and requires separate source-sharing approval; use `--synthetic` for a no-source smoke test.
+
+Next increments should preserve these boundaries: durable feedback/policy state, scoped repository snapshots, durable job recovery, and only then isolated editing with explicit approval checkpoints.

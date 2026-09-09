@@ -9,14 +9,19 @@ export class CopilotRuntime {
     this.clientFactory = clientFactory;
   }
 
-  async open(model, onEvent) {
+  async open(model, onEvent, { reasoningEffort } = {}) {
     this.directory = await mkdtemp(join(tmpdir(), 'copilot-supervisor-'));
     if (this.closed) { await this.cleanup(); throw new Error('Cancelled during startup.'); }
     this.client = this.clientFactory({ mode: 'empty', baseDirectory: join(homedir(), '.copilot'),
       workingDirectory: this.directory, logLevel: 'error', useLoggedInUser: true });
     await this.client.start();
     if (this.closed) throw new Error('Cancelled during startup.');
-    this.session = await this.client.createSession({ model, streaming: true,
+    if (reasoningEffort) {
+      const selected = (await this.client.listModels()).find(m => m.id === model);
+      if (!selected || (selected.policy && selected.policy.state !== 'enabled') || !selected.supportedReasoningEfforts?.includes(reasoningEffort))
+        throw new Error('Model unavailable or requested reasoning effort unsupported.');
+    }
+    this.session = await this.client.createSession({ model, reasoningEffort, streaming: true,
       workingDirectory: this.directory, enableConfigDiscovery: false,
       availableTools: [], excludedTools: ['builtin:*', 'mcp:*', 'custom:*'], tools: [], mcpServers: {},
       skipCustomInstructions: true, manageScheduleEnabled: false,

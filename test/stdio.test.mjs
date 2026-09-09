@@ -10,7 +10,7 @@ test('real stdio process starts and exposes tools without inference', async () =
   const client = new Client({ name: 'stdio-test', version: '1.0.0' });
   try {
     await client.connect(transport);
-    assert.equal((await client.listTools()).tools.length, 7);
+    assert.equal((await client.listTools()).tools.length, 9);
     const jobs = await client.callTool({ name: 'copilot_jobs', arguments: {} });
     assert.deepEqual(JSON.parse(jobs.content[0].text), []);
   } finally { await client.close(); }

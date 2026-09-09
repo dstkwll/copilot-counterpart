@@ -1,6 +1,6 @@
-# Model routing proposal
+# Model routing
 
-Status: agreed direction, not an enabled automatic router. Recorded 2026-09-09.
+Status: automatic model/effort selection implemented for context-only delegation. Triggered by an active orchestrator, not a background scheduler. Updated 2026-09-09.
 
 ## Objective
 
@@ -26,7 +26,7 @@ These are starting hypotheses, not measured model rankings. GitHub's [model comp
 
 The user has had poor experiences with Sonnet but is willing to try it initially. Do not treat its output as trusted or make it a required quality gate. Start with a few bounded, low-risk reviews; record useful findings, false positives, missed defects, and Astra's verification effort. Stop using it as a routine reviewer if its output creates more work than it saves. Use Sol or Opus when stronger evidence or a different perspective is needed. Do not claim the trial has happened yet.
 
-## Proposed automatic triggers
+## Orchestrator triggers
 
 1. Before a consequential design decision, request one focused Opus challenge: strongest alternative, questionable assumptions, and evidence that would change the recommendation.
 2. Delegate implementation only once requirements, allowed files, acceptance tests, and stop conditions are clear. Match the starting tier to complexity rather than always starting at the cheapest tier.
@@ -68,15 +68,16 @@ Cache read/write rates and long-context rates are separate. Sol's published cach
 
 ## Current implementation versus next increments
 
-Implemented: authenticated SDK access, model selection, context-only reviews, streaming events, steering, cancellation, deny-all tool policy, timeouts and bounded concurrency/history.
+Implemented: authenticated SDK access, role/model selection with availability fallback, validated reasoning-effort propagation, structured task briefs, context-only reviews/proposals, streaming events, steering, cancellation, deny-all tool policy, timeouts, bounded concurrency/history, one supervised escalation and process-local feedback. Token usage is aggregated without assuming internal billing rates.
+
+Sonnet trial is capped at three dispatches per process. One unhelpful review disables it for that process; helpful feedback does not promote it. These counters reset on server restart; durable evaluation remains planned. Code proposals do not edit or execute files.
 
 Not implemented:
 
-1. Role presets and reasoning-effort propagation (the current bridge does not yet request "high").
-2. Project eligibility policy and explicit allowance/budget settings.
-3. A compact delegation brief and standardized results contract.
-4. Durable outcome and usage tracking, with no stored secrets or raw private transcripts.
-5. Scoped repository snapshots, then isolated editing worktrees and approval checkpoints.
-6. Measured routing adjustments based on accepted patches, useful findings, false positives, repair effort, latency and consumption.
+1. Durable project eligibility policy and explicit allowance/budget settings. Current authorization is a required orchestrator attestation, not an independent policy lookup.
+2. Machine-validated findings (currently requested sections in the prompt, not guaranteed output schema).
+3. Durable outcome and usage tracking, with no stored secrets or raw private transcripts.
+4. Scoped repository snapshots, then isolated editing worktrees and approval checkpoints.
+5. Measured routing adjustments based on accepted patches, useful findings, false positives, repair effort, latency and consumption.
 
-Start with reviews and sparring. Implementation remains proposed until file isolation and verification are ready. No automatic routing was enabled merely by recording this plan.
+Start with reviews, sparring and code proposals. Actual implementation remains proposed until file isolation and verification are ready. Automatic routing does not grant any additional tool or data-sharing permissions. External review of this private repository source is awaiting explicit source-sharing approval; a real MCP Sol-high synthetic test has succeeded.

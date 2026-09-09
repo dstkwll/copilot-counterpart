@@ -7,6 +7,7 @@ test('adapter disables discovery, tools and permissions, verifies runtime tool s
   const runtime = new CopilotRuntime(options => {
     clientOptions = options;
     return { start: async () => {}, forceStop: async () => { stopped = true; },
+      listModels: async () => [{ id: 'test', supportedReasoningEfforts: ['high'] }],
       createSession: async options => {
         sessionOptions = options;
         return { on: () => () => {}, rpc: { tools: {
@@ -15,7 +16,8 @@ test('adapter disables discovery, tools and permissions, verifies runtime tool s
       } };
   });
   try {
-    await runtime.open('test', () => {});
+    await runtime.open('test', () => {}, { reasoningEffort: 'high' });
+    assert.equal(sessionOptions.reasoningEffort, 'high');
     assert.equal(clientOptions.mode, 'empty');
     assert.equal(sessionOptions.enableConfigDiscovery, false);
     assert.equal(sessionOptions.skipCustomInstructions, true);
