@@ -93,8 +93,8 @@ test('cancel while opening prevents any prompt being sent', async () => {
     close: async () => { closed = true; }
   }));
   const j = s.start({ requestId: 'r', model: 'm', prompt: 'p' });
-  await s.cancel(j.jobId);
-  finishOpen(); await tick();
+  const cancelling = s.cancel(j.jobId);
+  finishOpen(); await cancelling; await tick();
   assert.equal(sent, false); assert.equal(closed, true);
   await s.close();
 });
@@ -144,4 +144,13 @@ test('failed cleanup retains capacity and cannot be forgotten', async () => {
   assert.throws(() => s.start({ requestId: 'b', model: 'm', prompt: 'p' }), /Active/);
   await assert.rejects(s.forget(a.jobId), /unconfirmed/);
   await s.close();
+});
+
+test('session error interrupts a blocked send and cancel joins terminal cleanup',async()=>{
+ let emit,release,closed=false;
+ const s=new Supervisor(()=>({open:async(_m,e)=>{emit=e;return {send:()=>new Promise(r=>release=r)};},close:async()=>{closed=true;release?.();}}),{maxActive:1});
+ const job=s.get(s.start({requestId:'error',model:'m',prompt:'x'}).jobId);await tick();
+ emit({type:'session.error',data:{message:'bad'}});await s.cancel(job.id);
+ assert.equal(job.status,'failed');assert.equal(closed,true);assert.equal(job.cleanupComplete,true);
+ const next=s.start({requestId:'after-error',model:'m',prompt:'x'});await s.cancel(next.jobId);
 });

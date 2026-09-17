@@ -4,13 +4,20 @@ import { z } from 'zod';
 import { pathToFileURL } from 'node:url';
 import { Supervisor } from './supervisor.mjs';
 import { CopilotRuntime, listModels } from './copilot.mjs';
-import { Router, delegateSchema } from './router.mjs';
+import { DelegationTree, treeLimits } from './tree.mjs';
+import { Router, delegateSchema, chooseRoute } from './router.mjs';
 
-export function createServer(supervisor = new Supervisor(() => new CopilotRuntime()), models = listModels) {
-  const server = new McpServer({ name: 'copilot-supervisor', version: '0.1.0' }, {
-    instructions: 'Use copilot_delegate for authorized bounded reviews after meaningful changes, design sparring before consequential decisions, or well-specified analysis/code proposals. Skip trivial work. Routing selects model/effort; keep the primary assistant as decision-maker. Check project sharing authorization, supply only relevant non-secret context, poll progress, verify findings, and provide feedback. Never infer employer permission, grant file access, or launch unattended loops. One supervised escalation is permitted. The bridge does not implement or execute code.'
+export function createServer(supervisor, models = listModels) {
+  let router;
+  supervisor ??= new Supervisor(job => {
+    if (!job.delegation) return new CopilotRuntime();
+    const tree = new DelegationTree(job.delegation, node => new CopilotRuntime(undefined, tree.tool(node)), job.runtimeCatalog, router);
+    return tree;
   });
-  const router = new Router(supervisor, models);
+  const server = new McpServer({ name: 'copilot-supervisor', version: '0.1.0' }, {
+    instructions: 'Use copilot_delegate for authorized bounded reviews after meaningful changes, design sparring before consequential decisions, or well-specified analysis/code proposals. Skip trivial work. Routing selects model/effort; keep the primary assistant as decision-maker. Check project sharing authorization, supply only relevant non-secret context, poll progress, verify findings, and provide feedback. Never infer employer permission, grant file access, or launch unattended loops. One supervised escalation is permitted. copilot_orchestrate explicitly enables bounded recursive context-only delegation. The bridge does not implement or execute code.'
+  });
+  router = new Router(supervisor, models);
   const register = (name, description, inputSchema, handler) => server.registerTool(name,
     { description, inputSchema }, async args => {
       try { return { content: [{ type: 'text', text: JSON.stringify(await handler(args)) }] }; }
@@ -19,6 +26,35 @@ export function createServer(supervisor = new Supervisor(() => new CopilotRuntim
   const jobId = z.string().uuid();
   register('copilot_models', 'List models available through your Copilot authentication. No inference request.', {}, models);
   register('copilot_delegate', 'Preferred delegation entry point: automatically select a model and reasoning effort for a bounded review, sparring, analysis or code proposal. Use after meaningful changes/tests, before consequential decisions, or for well-specified analytical work; skip trivial work. Assert sharing authorization from the user/project policy, never guess it. No file access or implementation execution. Consumes Copilot allowance. Poll copilot_events, verify findings, optionally provide feedback. One explicit parentJobId escalation is allowed; no unattended retries.', delegateSchema, args => router.delegate(args));
+  const orchestrationRequests = new Map();
+  register('copilot_orchestrate', 'Opt in to model-initiated recursive delegation through the router. Context only: no files, shell or network tools. Explicit model selects the lead only; children route independently. Limits cover the whole tree including waiting parents. Usage thresholds are soft, not a spend cap. Use ordinary copilot_events/cancel/forget on the returned job.', {
+    requestId: z.string().min(1).max(128), prompt: z.string().min(1).max(40000),
+    sharingAuthorized: z.literal(true), model: z.string().min(1).max(128).optional(),
+    reasoningEffort: z.enum(['none', 'low', 'medium', 'high', 'xhigh', 'max']).optional(),
+    role: delegateSchema.role.default('analysis'), complexity: delegateSchema.complexity, risk: delegateSchema.risk,
+    limits: treeLimits.default({ maxNodes: 8, maxDepth: 2, maxObservedTokens: 100000, maxUsageEvents: 32 }),
+    timeoutSeconds: delegateSchema.timeoutSeconds
+  }, async args => {
+    const fingerprint = JSON.stringify(args);
+    const prior = orchestrationRequests.get(args.requestId);
+    if (prior) {
+      if (prior.fingerprint !== fingerprint) throw Error('Conflicting orchestration requestId.');
+      return supervisor.snapshot(supervisor.get((await prior.promise).jobId));
+    }
+    if (orchestrationRequests.size >= 64) throw Error('Orchestration request history is full.');
+    const promise = (async () => {
+      const catalog = await models();
+      if (!args.model && args.reasoningEffort) throw Error('Specify a lead model when overriding reasoning effort.');
+      const route = args.model ? { model: args.model, reasoningEffort: args.reasoningEffort ?? 'high', reason: 'Explicit lead selection; descendants use router.' } : chooseRoute(args, catalog, router);
+      const selected = catalog.find(m => m.id === route.model && (!m.policy || m.policy.state === 'enabled') && m.supportedReasoningEfforts?.includes(route.reasoningEffort));
+      if (!selected) throw Error('Lead model/effort unavailable; no fallback.');
+      const result = supervisor.start({ requestId: `tree:${args.requestId}`, prompt: args.prompt, model: route.model, reasoningEffort: route.reasoningEffort, route, delegation: args.limits, runtimeCatalog: catalog, timeoutSeconds: args.timeoutSeconds });
+      if (route.trial) router.sonnetTrials++;
+      return result;
+    })();
+    orchestrationRequests.set(args.requestId, { fingerprint, promise });
+    return promise;
+  });
   register('copilot_feedback', 'Record the orchestrator-verified outcome of a finished routed job. An unhelpful Sonnet review disables its trial for this server process. Does not send inference or automatically promote models.', {
     jobId, outcome: z.enum(['useful', 'unhelpful', 'inconclusive'])
   }, ({ jobId, outcome }) => router.feedback(jobId, outcome));

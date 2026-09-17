@@ -8,7 +8,7 @@ function publicEventData(event) {
   const data = event.data ?? {};
   const fields = ['messageId', 'content', 'deltaContent', 'phase', 'toolCallId', 'toolName',
     'arguments', 'partialOutput', 'progressMessage', 'success', 'aborted', 'message', 'errorType',
-    'model', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'cost'];
+    'nodeId', 'parentNodeId', 'depth', 'effectiveModel', 'status', 'route', 'usage', 'model', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'cost'];
   const result = Object.fromEntries(fields.filter(k => data[k] !== undefined).map(k => [k, data[k]]));
   if (data.result) result.result = { content: data.result.content, detailedContent: data.result.detailedContent };
   if (data.error) result.error = { message: data.error.message };
@@ -43,7 +43,7 @@ export class Supervisor {
 
   snapshot(job) {
     return { jobId: job.id, status: job.status, model: job.model,
-      reasoningEffort: job.reasoningEffort, route: job.route, usage: job.usage, feedback: job.feedback,
+      reasoningEffort: job.reasoningEffort, route: job.route, delegation: job.delegation, usage: job.usage, feedback: job.feedback,
       sessionId: job.session?.sessionId, cursor: job.cursor,
       createdAt: job.createdAt, error: job.error, result: job.result,
       resultTruncated: job.resultTruncated ?? false };
@@ -51,11 +51,11 @@ export class Supervisor {
 
   list() { return [...this.jobs.values()].map(j => this.snapshot(j)); }
 
-  start({ requestId, prompt, model, reasoningEffort, route, timeoutSeconds = 300 }) {
+  start({ requestId, prompt, model, reasoningEffort, route, timeoutSeconds = 300, delegation, runtimeCatalog }) {
     if (this.closed) throw new Error('Supervisor is shutting down.');
     if (!requestId || !prompt || prompt.length > 200000 || !model || timeoutSeconds < 1 || timeoutSeconds > 900)
       throw new Error('Invalid request: require requestId, model, bounded prompt and timeout (1–900 seconds).');
-    const fingerprint = createHash('sha256').update(JSON.stringify({ prompt, model, reasoningEffort, route, timeoutSeconds })).digest('hex');
+    const fingerprint = createHash('sha256').update(JSON.stringify({ prompt, model, reasoningEffort, route, timeoutSeconds, delegation })).digest('hex');
     const prior = [...this.jobs.values()].find(j => j.requestId === requestId);
     if (prior) {
       if (prior.fingerprint !== fingerprint) throw new Error('requestId already used with different inputs.');
@@ -65,10 +65,10 @@ export class Supervisor {
       throw new Error('Active job limit reached. Wait or cancel an existing job.');
     if (this.jobs.size >= this.maxJobs)
       throw new Error('Job history is full. Forget a finished job before starting another.');
-    const job = { id: randomUUID(), requestId, fingerprint, model, reasoningEffort, route, usage: { inputTokens: 0, outputTokens: 0, events: 0 }, status: 'starting',
+    const job = { id: randomUUID(), requestId, fingerprint, model, reasoningEffort, route, delegation, runtimeCatalog, usage: { inputTokens: 0, outputTokens: 0, events: 0 }, status: 'starting',
       createdAt: new Date().toISOString(), events: [], cursor: 0, waiters: new Set(), result: '' };
     this.jobs.set(job.id, job);
-    this.record(job, 'supervisor.started', { model, timeoutSeconds, policy: 'context-only; all tools denied' });
+    this.record(job, 'supervisor.started', { model, timeoutSeconds, policy: delegation ? 'context-only; bounded router delegation only' : 'context-only; all tools denied' });
     job.timer = setTimeout(() => void this.cancel(job.id, 'timed_out'), timeoutSeconds * 1000);
     job.task = this.run(job, prompt);
     return this.snapshot(job);
@@ -76,7 +76,7 @@ export class Supervisor {
 
   async run(job, prompt) {
     try {
-      job.runtime = this.factory();
+      job.runtime = this.factory(job);
       job.session = await job.runtime.open(job.model, event => {
         if (terminal.has(job.status)) return;
         if (keptEvents.test(event.type)) this.record(job, event.type, publicEventData(event));
@@ -92,7 +92,10 @@ export class Supervisor {
           job.result = content.slice(0, 100000);
           job.resultTruncated = content.length > 100000;
         }
-        if (event.type === 'session.error') this.finish(job, 'failed', event.data?.message ?? 'Session error');
+        if (event.type === 'session.error') {
+          this.finish(job, 'failed', event.data?.message ?? 'Session error');
+          void this.cancel(job.id);
+        }
         if (event.type === 'session.idle') this.finish(job, event.data?.aborted ? 'cancelled' : 'completed');
       }, { reasoningEffort: job.reasoningEffort });
       if (terminal.has(job.status)) return;
@@ -151,11 +154,16 @@ export class Supervisor {
 
   async cancel(id, status = 'cancelled') {
     const job = this.get(id);
-    if (terminal.has(job.status)) return this.snapshot(job);
-    this.finish(job, status);
-    // Stop the dedicated runtime as well, so cancellation covers startup and stuck sends.
-    await job.runtime?.close().catch(error => this.record(job, 'supervisor.cleanup_error', { message: error.message }));
-    return this.snapshot(job);
+    if (!job.cancelPromise) {
+      this.finish(job, status);
+      // Terminal state does not imply its send/startup/cleanup has settled.
+      job.cancelPromise = (async () => {
+        await job.runtime?.close().catch(error => this.record(job, 'supervisor.cleanup_error', { message: error.message }));
+        await job.task;
+        return this.snapshot(job);
+      })();
+    }
+    return job.cancelPromise;
   }
 
   async forget(id) {

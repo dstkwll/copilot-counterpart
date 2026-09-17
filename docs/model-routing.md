@@ -1,6 +1,6 @@
 # Model routing
 
-Status: automatic model/effort selection implemented for context-only delegation. Triggered by an active orchestrator, not a background scheduler. Updated 2026-09-09.
+Status: automatic model/effort selection implemented for context-only delegation, with opt-in recursive orchestration. Triggered by an active orchestrator, not a background scheduler. Updated 2026-09-09.
 
 ## Objective
 
@@ -81,3 +81,10 @@ Not implemented:
 5. Measured routing adjustments based on accepted patches, useful findings, false positives, repair effort, latency and consumption.
 
 Start with reviews, sparring and code proposals. Actual implementation remains proposed until file isolation and verification are ready. Automatic routing does not grant additional tool permissions. A real MCP Sol-high synthetic test has succeeded.
+
+
+## Recursive handoffs (2026-09-16)
+
+An explicitly selected Copilot lead such as Astra can now initiate handoffs via `copilot_orchestrate`. Explicit model choice applies to the lead only. All children route by role/complexity/risk; selected children may delegate again within the original tree limits. Ordinary leaf calls and one finished-job escalation retain their behavior. The same process-local Sonnet trial state is shared across root and child routing.
+
+The outer assistant still supervises outcomes and authorization. The Copilot lead chooses decomposition and synthesis. Delegation is a separate capability from model selection and grants no editing, shell or repository access. See [implementation and evidence](recursive-delegation.md). Savings remain unmeasured; compare quality, actual usage, latency and repair effort before claiming improvement.

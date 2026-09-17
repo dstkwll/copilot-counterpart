@@ -47,3 +47,38 @@ test('close is single-flight and cleanup runs even if forceStop rejects', async 
   assert.ok(results.every(r => r.status === 'rejected'));
   assert.equal(stops, 1); assert.equal(cleanups, 1);
 });
+
+test('delegation adapter exposes only the explicit custom tool and denies other tools', async () => {
+ let config;
+ const tool={name:'delegate_task',handler:async()=> 'ok'};
+ const runtime=new CopilotRuntime(()=>({start:async()=>{},forceStop:async()=>{},
+  listModels:async()=>[{id:'test',supportedReasoningEfforts:['high']}],
+  createSession:async c=>{config=c;return {on:()=>()=>{},rpc:{tools:{initializeAndValidate:async()=>{},getCurrentMetadata:async()=>({tools:[{name:'delegate_task'}]})}}};}
+ }),tool);
+ try {
+  await runtime.open('test',()=>{},{reasoningEffort:'high'});
+  assert.deepEqual(config.availableTools,['custom:delegate_task']);
+  assert.deepEqual(config.excludedTools,['builtin:*','mcp:*']);
+  assert.equal((await config.hooks.onPreToolUse({toolName:'delegate_task'})).permissionDecision,'allow');
+  assert.equal((await config.hooks.onPreToolUse({toolName:'task'})).permissionDecision,'deny');
+  assert.equal((await config.hooks.onPreToolUse({toolName:'bash'})).permissionDecision,'deny');
+ } finally {await runtime.close();}
+});
+
+test('cancel joins late startup and stops again before freeing the runtime',async()=>{
+ let release,entered;const ready=new Promise(r=>entered=r);let stops=0,created=0;
+ const runtime=new CopilotRuntime(()=>({start:async()=>{entered();await new Promise(r=>release=r);},forceStop:async()=>{stops++;},createSession:async()=>{created++;}}));
+ const opening=runtime.open('test',()=>{});opening.catch(()=>{});
+ await ready;const closing=runtime.close();release();
+ await assert.rejects(opening,/Cancelled/);await closing;
+ assert.equal(created,0);assert.equal(stops,2);
+});
+
+test('failed initial stop still joins startup and attempts final stop',async()=>{
+ let release,entered;const ready=new Promise(r=>entered=r);let stops=0,cleanups=0;
+ const runtime=new CopilotRuntime(()=>({start:async()=>{entered();await new Promise(r=>release=r);},forceStop:async()=>{if(++stops===1)throw Error('first stop failed');}}));
+ runtime.cleanup=async()=>{cleanups++;};
+ const opening=runtime.open('test',()=>{});opening.catch(()=>{});await ready;
+ const closing=runtime.close();release();await assert.rejects(closing,/first stop failed/);
+ assert.equal(stops,2);assert.equal(cleanups,1);
+});

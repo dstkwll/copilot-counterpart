@@ -16,9 +16,9 @@ See [model routing](docs/model-routing.md) for role assignments, Sonnet's probat
 - Send immediate steering messages and cancel a dedicated job runtime.
 - Request IDs deduplicate identical starts for this process's retained history.
 - Two active jobs maximum, 32 retained jobs, 512 events per job. Old event loss and truncation are reported. Defaults to a five-minute deadline; maximum 15 minutes.
-- All delegate tools are disabled. The adapter checks the actual runtime tool set before sending context, denies every permission request and pre-tool call, disables configuration/instruction discovery, and uses a fresh temporary working directory.
+- For ordinary leaf jobs, all delegate tools are disabled. The adapter checks the actual runtime tool set before sending context, denies every permission request and pre-tool call, disables configuration/instruction discovery, and uses a fresh temporary working directory.
 
-The orchestrator supplies selected excerpts, diffs or requirements in `prompt`. No automatic repository scanning, file editing, commands, web access, nested agents, or permission-approval endpoint is exposed. Suggested fixes come back as text for the orchestrator to verify and apply within the user's authorization. These are SDK-level restrictions, not an OS sandbox against a compromised SDK/runtime.
+The orchestrator supplies selected excerpts, diffs or requirements in `prompt`. No automatic repository scanning, file editing, commands, web access, or permission-approval endpoint is exposed. Nested context-only agents require the explicit `copilot_orchestrate` entry point described below. Suggested fixes come back as text for the orchestrator to verify and apply within the user's authorization. These are SDK-level restrictions, not an OS sandbox against a compromised SDK/runtime.
 
 ## Setup
 
@@ -39,7 +39,7 @@ codex mcp add copilot-supervisor -- /absolute/path/to/node /absolute/path/to/cop
 
 Open a new Codex thread to pick up the tools. Do not also install the plugin scaffold's MCP entry, which would create a second independent server/history. `.codex-plugin/plugin.json` is included for future plugin packaging; the initial installation uses direct local MCP registration.
 
-On this machine the server is registered as `copilot-supervisor`, pointing to this source directory and the Node 24 executable. The companion `.mcp.json` also uses machine-local absolute paths; adjust them if moving the project. Updating files here updates the server on its next process start. Remove the registration with `codex mcp remove copilot-supervisor` if no longer wanted.
+The installed server can be a separate copy from the development checkout; source edits do not update it, so refresh it deliberately after verification.
 
 ## Cross-session rollout
 
@@ -115,3 +115,19 @@ The routed synthetic smoke test exercised the real stdio MCP path and automatica
 A subsequent Sol-high source review completed and produced two confirmed lifecycle fixes; see [review disposition](docs/review-2026-09-09.md). Runtime slots now remain occupied until cleanup is confirmed, and failed cleanup cannot be forgotten to bypass the limit.
 
 Next increments should preserve these boundaries: durable feedback/policy state, scoped repository snapshots, durable job recovery, and only then isolated editing with explicit approval checkpoints.
+
+## Model-initiated delegation (opt-in)
+
+`copilot_orchestrate` starts a lead that can call `delegate_task`. Select the lead explicitly (for example `model: "gpt-6-astra", reasoningEffort: "high"`) or omit model/effort to use the normal role/complexity/risk router. Supply `requestId`, `prompt`, and `sharingAuthorized: true`. No installed runtime is upgraded automatically.
+
+The model writes a bounded task/context/acceptance brief and selects role, complexity and risk. The host router chooses each child's model and effort from the authenticated catalog snapshot captured for this request. Each session checks the selected model/effort against the current catalog before inference; a stale choice fails rather than silently switching. The lead may set `allowDelegation: true` on selected handoffs; otherwise children are leaves. Each descendant uses the same router and remaining tree allowance. This is separate from the existing finished-job escalation API.
+
+Defaults: root depth 0, maximum depth 2 (configurable 0–3), eight total admitted nodes including root (configurable 1–8), 100,000 observed input/output tokens (maximum 200,000), 32 observed usage events (maximum 64), and a 300-second outer deadline (maximum 900). These are supplied in `limits` except `timeoutSeconds`. Failed admissions are not refunded. There is no launch queue: cap violations return a rejection. Waiting parents count as resident sessions; there is no deadlock on an execution semaphore. Two outer jobs can therefore own at most sixteen sessions in total. This is an explicit expansion from the old two-session bound only for opt-in trees.
+
+Only the SDK custom `delegate_task` tool is exposed; native task, files, shell, MCP and network tools remain disabled. Exact tool metadata is checked before prompts are sent. Every agent loop, session and authentication request is owned by the official Copilot SDK. A tree-wide failure/cancel closes admission and stops descendants, including late startup. Unconfirmed cleanup keeps the outer capacity occupied.
+
+Use existing `copilot_events`, `copilot_cancel`, `copilot_steer` and `copilot_forget` with the outer job ID. Node events report lineage, depth, route, effective model and usage. Child results are capped at 12,000 characters before returning to their parent. Whole transcripts are not inherited. Orchestration request IDs remain reserved for the process lifetime (up to 64), even after failures or forgetting.
+
+Explicit lead selection has no fallback. Descendants use the existing router's documented availability fallback and report it. Usage-model mismatch or missing model evidence prevents accepted completion. Evidence may arrive after a charge: observed-token and usage-event limits are **soft post-paid stops**, not prepaid dollar caps. Missing/delayed usage and in-flight output can overshoot; no exact billing or savings claim is made.
+
+Offline: `npm test`. Synthetic live MCP proof: `node scripts/probe-tree.mjs --live` (three sessions, 150 seconds, consumes allowance). Live inference is never part of the default tests. See [recursive delegation evidence](docs/recursive-delegation.md).
