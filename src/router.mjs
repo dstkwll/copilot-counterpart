@@ -14,7 +14,7 @@ export const delegateSchema = {
   timeoutSeconds: z.number().int().min(1).max(900).default(300)
 };
 const inputSchema = z.object(delegateSchema).strict();
-const SOL = 'gpt-5.6-sol', OPUS = 'claude-opus-5', SONNET = 'claude-sonnet-5';
+const SOL = 'gpt-6-sol', OPUS = 'claude-opus-5.5', SONNET = 'claude-sonnet-5';
 const instructions = {
   review: 'Review independently. Return concrete defects, severity, source location, consequence and verification steps. Do not invent issues to fill a quota.',
   correctness: 'Check correctness, edge cases, races and violated invariants. Return evidence-backed defects and minimal reproductions. Separate facts from hypotheses.',
@@ -39,7 +39,7 @@ export function chooseRoute(input, catalog, { sonnetTrials = 0, sonnetDisabled =
     candidates = !sonnetDisabled && sonnetTrials < 3 ? [SONNET, SOL] : [SOL];
     reason = candidates[0] === SONNET ? 'Bounded Sonnet trial (maximum three per server process).' : 'Sonnet trial exhausted/disabled; use Sol.';
   } else {
-    candidates = input.complexity === 'small' ? ['gpt-5.6-luna', 'gpt-5.6-terra', SOL] : ['gpt-5.6-terra', SOL];
+    candidates = input.complexity === 'small' ? ['gpt-6-luna', SOL] : [SOL];
     effort = 'medium'; reason = 'Bounded analysis/code proposal matched to complexity.';
   }
   const model = candidates.map(id => catalog.find(m => m.id === id && (!m.policy || m.policy.state === 'enabled')
@@ -47,7 +47,7 @@ export function chooseRoute(input, catalog, { sonnetTrials = 0, sonnetDisabled =
   if (!model) throw new Error('No allowed model supports the required reasoning effort; no inference started.');
   return { model: model.id, reasoningEffort: effort, role: input.role,
     depth: parent ? 1 : 0, parentJobId: parent?.id,
-    trial: model.id === SONNET, reason, fallback: model.id !== candidates[0], policyVersion: 1 };
+    trial: model.id === SONNET, reason, fallback: model.id !== candidates[0], policyVersion: 2 };
 }
 
 export class Router {

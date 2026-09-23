@@ -1,6 +1,6 @@
 # Model routing
 
-Status: automatic model/effort selection implemented for context-only delegation, with opt-in recursive orchestration. Triggered by an active orchestrator, not a background scheduler. Updated 2026-09-09.
+Status: automatic model/effort selection implemented for context-only delegation, with opt-in recursive orchestration. Triggered by an active orchestrator, not a background scheduler. Updated 2026-09-23.
 
 ## Objective
 
@@ -13,11 +13,11 @@ Send only context the user or project has authorized for their Copilot service; 
 | Role | Proposed model / effort | Escalation |
 | --- | --- | --- |
 | Intent, architecture synthesis, adjudication | Astra in Codex | Keep the user-facing relationship unchanged |
-| Small deterministic work, fixtures, repetitive tests | Luna medium | Terra when behavior or context is ambiguous |
-| Ordinary bounded implementation | Terra medium | Sol high for cross-cutting work or difficult debugging |
-| Routine review trial | Sonnet 5 high | Sol high for correctness; Opus 5 for consequential design concerns |
-| Correctness review and difficult invariants | Sol high | Astra verifies unresolved findings against evidence |
-| Architecture sparring and alternative designs | Opus 5 high | One focused follow-up, then Astra adjudicates |
+| Small deterministic work, fixtures, repetitive tests | GPT-6 Luna medium | GPT-6 Sol when behavior or context is ambiguous |
+| Ordinary bounded implementation | GPT-6 Sol medium | GPT-6 Sol high for cross-cutting work or difficult debugging |
+| Routine review trial | Sonnet 5 high | Sol high for correctness; Opus 5.5 for consequential design concerns |
+| Correctness review and difficult invariants | GPT-6 Sol high | Astra verifies unresolved findings against evidence |
+| Architecture sparring and alternative designs | Opus 5.5 high | One focused follow-up, then Astra adjudicates |
 | Experimental inexpensive worker | MAI-Code-1.1-Flash | Compare against Luna before any promotion |
 
 These are starting hypotheses, not measured model rankings. GitHub's [model comparison](https://docs.github.com/en/copilot/reference/ai-models/model-comparison) supports the broad task categories, not superiority on this user's projects.
@@ -38,7 +38,13 @@ Give reviewers the requirements, diff, relevant context and test evidence, witho
 
 Keep long polls bounded, review emitted progress at useful checkpoints, and cancel drift. No automatic deployments, pushes, destructive actions, privilege expansion, or unbounded reviewer debates.
 
-## Availability snapshot
+## Current routing (policy version 2)
+
+Verified against the authenticated Copilot catalog on 2026-09-23: `gpt-6-sol`, `gpt-6-luna`, and `claude-opus-5.5` are enabled and support the retained medium/high efforts. Sol replaces both the previous Sol correctness tier and Terra ordinary-work tier; Luna retains small work. Sonnet 5 remains the capped routine-review trial at high effort, with Sol high after the trial or when Sonnet is unavailable. Small work falls back from Luna to Sol; correctness from Sol to Opus 5.5; sparring from Opus 5.5 to Sol. Ordinary work requires Sol. No older-generation model is silently selected. One escalation and all permission/tree limits are unchanged. Explicit lead model selection remains separate from child routing.
+
+The installed Codex `copilot-delegation` skill describes this router; Codex MCP registration points to the separately installed supervisor runtime. Native Codex model selection is separate and its main default remains Astra. Restarted/new MCP server processes load the updated routing; already-running processes retain their loaded policy.
+
+## Historical availability snapshot
 
 The authenticated SDK catalog on 2026-09-09 advertised:
 
@@ -88,3 +94,9 @@ Start with reviews, sparring and code proposals. Actual implementation remains p
 An explicitly selected Copilot lead such as Astra can now initiate handoffs via `copilot_orchestrate`. Explicit model choice applies to the lead only. All children route by role/complexity/risk; selected children may delegate again within the original tree limits. Ordinary leaf calls and one finished-job escalation retain their behavior. The same process-local Sonnet trial state is shared across root and child routing.
 
 The outer assistant still supervises outcomes and authorization. The Copilot lead chooses decomposition and synthesis. Delegation is a separate capability from model selection and grants no editing, shell or repository access. See [implementation and evidence](recursive-delegation.md). Savings remain unmeasured; compare quality, actual usage, latency and repair effort before claiming improvement.
+
+## Migration validation (2026-09-23)
+
+All 41 offline tests passed in source and installed runtime, including tier selection, unavailable-model fallbacks, legacy-only catalog rejection, escalation ceilings, and recursive child routing. A fresh installed stdio MCP server completed three synthetic routed calls: GPT-6 Luna/medium, GPT-6 Sol/high, and Claude Opus 5.5/high. Each returned 42 for 17+25; usage events confirmed the effective model. This is an availability/routing smoke check, not a comparative quality evaluation. Recursive routing was tested offline; the updated nested live probe was not rerun.
+
+An independent Copilot GPT-5.6 Sol/high review completed. Its two concerns were checked against source: high-effort review fallback is intentionally retained, and legacy parent jobs cannot cross the process-local supervisor job map into a freshly loaded policy. No code changes were warranted. Existing MCP processes were preserved; new connections load policy v2.

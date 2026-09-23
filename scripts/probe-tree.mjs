@@ -23,7 +23,7 @@ try {
    assert.equal(r.status,'completed');assert.match(r.result,/42/);
    assert.equal(nodes.size,3);assert.deepEqual([...nodes.values()].map(n=>n.depth).sort(),[0,1,2]);
    assert.equal([...nodes.values()].find(n=>n.depth===0).effectiveModel,'gpt-6-astra');
-   assert.ok([...nodes.values()].filter(n=>n.depth>0).every(n=>n.effectiveModel==='gpt-5.6-luna'));done=true;
+   assert.ok([...nodes.values()].filter(n=>n.depth>0).every(n=>n.effectiveModel==='gpt-6-luna'));done=true;
   }
  }
  await call('copilot_forget',{jobId});jobId=undefined;

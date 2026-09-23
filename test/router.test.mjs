@@ -4,7 +4,7 @@ import { setImmediate as tick } from 'node:timers/promises';
 import { Router, chooseRoute } from '../src/router.mjs';
 import { Supervisor } from '../src/supervisor.mjs';
 
-const catalog = ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol', 'claude-sonnet-5', 'claude-opus-5']
+const catalog = ['gpt-6-luna', 'gpt-6-sol', 'claude-sonnet-5', 'claude-opus-5.5']
   .map(id => ({ id, policy: { state: 'enabled' }, supportedReasoningEfforts: ['medium', 'high'] }));
 const input = { requestId: 'r1', role: 'review', complexity: 'normal', risk: 'low',
   task: 'Review sample', context: 'function example() {}', acceptanceCriteria: 'Find real defects', sharingAuthorized: true };
@@ -20,17 +20,17 @@ function fixture(models = async () => catalog) {
 test('role/complexity/risk map to intended models and efforts', () => {
   const route = overrides => chooseRoute({ ...input, ...overrides }, catalog);
   assert.equal(route({}).model, 'claude-sonnet-5');
-  assert.equal(route({ role: 'correctness' }).model, 'gpt-5.6-sol');
-  assert.equal(route({ risk: 'high' }).model, 'claude-opus-5');
-  assert.equal(route({ role: 'sparring' }).model, 'claude-opus-5');
-  assert.equal(route({ role: 'code_proposal', complexity: 'small' }).model, 'gpt-5.6-luna');
-  assert.equal(route({ role: 'analysis' }).model, 'gpt-5.6-terra');
+  assert.equal(route({ role: 'correctness' }).model, 'gpt-6-sol');
+  assert.equal(route({ risk: 'high' }).model, 'claude-opus-5.5');
+  assert.equal(route({ role: 'sparring' }).model, 'claude-opus-5.5');
+  assert.equal(route({ role: 'code_proposal', complexity: 'small' }).model, 'gpt-6-luna');
+  assert.equal(route({ role: 'analysis' }).model, 'gpt-6-sol');
   assert.equal(route({ role: 'code_proposal', complexity: 'complex' }).reasoningEffort, 'high');
 });
 
 test('availability/policy/effort checked with safe fallback, no arbitrary downgrade', () => {
   const denied = catalog.map(m => m.id === 'claude-sonnet-5' ? { ...m, policy: { state: 'disabled' } } : m);
-  assert.equal(chooseRoute(input, denied).model, 'gpt-5.6-sol');
+  assert.equal(chooseRoute(input, denied).model, 'gpt-6-sol');
   assert.equal(chooseRoute(input, denied).fallback, true);
   assert.throws(() => chooseRoute(input, [{ id: 'claude-sonnet-5', supportedReasoningEfforts: ['low'] }]), /No allowed model/);
 });
@@ -62,7 +62,7 @@ test('negative Sonnet feedback disables trial, helpful feedback does not promote
     assert.equal(r.feedback(a.jobId, 'unhelpful').sonnetDisabled, true);
     assert.throws(() => r.feedback(a.jobId, 'useful'), /contradictory/);
     const b = await r.delegate({ ...input, requestId: 'r2' });
-    assert.equal(b.model, 'gpt-5.6-sol');
+    assert.equal(b.model, 'gpt-6-sol');
   } finally { await s.close(); }
 });
 
@@ -71,7 +71,7 @@ test('Sonnet has a maximum of three trials per process', async () => {
   try {
     for (let i = 0; i < 4; i++) {
       const job = await r.delegate({ ...input, requestId: `r${i}` }); await tick();
-      assert.equal(job.model, i < 3 ? 'claude-sonnet-5' : 'gpt-5.6-sol');
+      assert.equal(job.model, i < 3 ? 'claude-sonnet-5' : 'gpt-6-sol');
       calls[i].emit({ type: 'session.idle', data: {} }); await tick();
     }
   } finally { await s.close(); }
@@ -84,7 +84,7 @@ test('one escalation only; no duplicates, no recursion, no cancelled escalation'
     await assert.rejects(r.delegate({ ...input, requestId: 'early', parentJobId: a.jobId }), /completed or failed/);
     calls[0].emit({ type: 'session.idle', data: {} }); await tick();
     const b = await r.delegate({ ...input, requestId: 'escalation', parentJobId: a.jobId }); await tick();
-    assert.equal(b.model, 'gpt-5.6-sol');
+    assert.equal(b.model, 'gpt-6-sol');
     await assert.rejects(r.delegate({ ...input, requestId: 'duplicate', parentJobId: a.jobId }), /already has/);
     calls[1].emit({ type: 'session.idle', data: {} }); await tick();
     await assert.rejects(r.delegate({ ...input, requestId: 'recursive', parentJobId: b.jobId }), /Only one escalation/);
@@ -101,4 +101,24 @@ test('catalog failure starts no inference and can be retried explicitly', async 
     assert.equal(calls.length, 0); fail = false;
     await r.delegate(input); await tick(); assert.equal(calls.length, 1);
   } finally { await s.close(); }
+});
+
+
+test('policy v2 preserves tier fallbacks, rejects legacy-only catalogs and enforces the new ceiling', () => {
+  const route = (overrides, models = catalog, state = {}) => chooseRoute({ ...input, ...overrides }, models, state);
+  assert.equal(route({ role: 'analysis' }).reasoningEffort, 'medium');
+  assert.equal(route({ role: 'analysis' }).policyVersion, 2);
+  const withoutLuna = catalog.filter(m => m.id !== 'gpt-6-luna');
+  assert.equal(route({ role: 'analysis', complexity: 'small' }, withoutLuna).model, 'gpt-6-sol');
+  assert.equal(route({ role: 'analysis', complexity: 'small' }, withoutLuna).fallback, true);
+  assert.equal(route({ role: 'correctness' }, catalog.filter(m => m.id !== 'gpt-6-sol')).model, 'claude-opus-5.5');
+  assert.equal(route({ role: 'sparring' }, catalog.filter(m => m.id !== 'claude-opus-5.5')).model, 'gpt-6-sol');
+  const legacy = ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol', 'claude-opus-5']
+    .map(id => ({ id, supportedReasoningEfforts: ['medium', 'high'] }));
+  for (const role of ['analysis', 'correctness', 'sparring']) {
+    assert.throws(() => route({ role }, legacy), /No allowed model/);
+  }
+  const parent = { id: 'parent', status: 'completed', route: { depth: 0 }, model: 'gpt-6-sol' };
+  assert.equal(route({}, catalog, { parent }).model, 'claude-opus-5.5');
+  assert.throws(() => route({}, catalog, { parent: { ...parent, model: 'claude-opus-5.5' } }), /ceiling/);
 });

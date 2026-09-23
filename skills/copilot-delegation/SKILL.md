@@ -20,9 +20,9 @@ Discover `copilot_delegate` and its companion tools. If unavailable, report that
 Supply a fresh `requestId`, `task`, relevant `context`, explicit `acceptanceCriteria`, `sharingAuthorized: true`, and a bounded deadline (normally 300 seconds). Choose the role by the actual task:
 
 - `review`: ordinary independent review; Sonnet is a limited probationary trial.
-- `correctness`: defects, lifecycle, security invariants; normally Sol high.
-- `sparring`: consequential design alternatives; normally Opus high.
-- `analysis` / `code_proposal`: bounded analytical work or proposed code; small work normally Luna, normal work Terra, complex/high-risk work Sol.
+- `correctness`: defects, lifecycle, security invariants; normally GPT-6 Sol high.
+- `sparring`: consequential design alternatives; normally Opus 5.5 high.
+- `analysis` / `code_proposal`: bounded analytical work or proposed code; small work normally GPT-6 Luna medium, normal work GPT-6 Sol medium, complex/high-risk work GPT-6 Sol high.
 
 Set complexity and risk honestly. Let the router validate the current catalog and select the actual model/effort; do not hardcode availability or route based on public pricing. Plan pricing and allowances vary.
 

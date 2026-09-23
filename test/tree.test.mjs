@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DelegationTree } from '../src/tree.mjs';
 import { Supervisor } from '../src/supervisor.mjs';
-const catalog = () => ['gpt-6-astra','gpt-5.6-luna','gpt-5.6-terra','gpt-5.6-sol','claude-opus-5'].map(id => ({id,supportedReasoningEfforts:['high','medium']}));
+const catalog = () => ['gpt-6-astra','gpt-6-luna','gpt-6-sol','claude-opus-5.5'].map(id => ({id,supportedReasoningEfforts:['high','medium']}));
 const brief = (allowDelegation=false) => ({task:'compute',context:'synthetic',acceptanceCriteria:'answer',role:'analysis',complexity:'small',risk:'low',allowDelegation});
 function harness(behavior, limits={}, options={}) {
   const events=[], opened=[], stopped=[];
@@ -32,7 +32,7 @@ test('Astra -> routed child -> routed grandchild; usage aggregated once; no chil
  });
  await h.job.task;
  assert.equal(h.job.status,'completed');assert.equal(h.job.result,'answer42');
- assert.deepEqual(h.opened.map(x=>x.model),['gpt-6-astra','gpt-5.6-luna','gpt-5.6-luna']);
+ assert.deepEqual(h.opened.map(x=>x.model),['gpt-6-astra','gpt-6-luna','gpt-6-luna']);
  assert.equal(h.stopped.length,3);assert.equal(h.job.usage.inputTokens,30);
  assert.equal(h.job.usage.events,3);assert.ok(h.events.some(e=>e.data?.depth===2));
 });
