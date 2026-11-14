@@ -96,3 +96,22 @@ test('adapter validates model existence and policy even without a reasoning effo
   try { await assert.rejects(runtime.open('test', () => {}, { reasoningEffort: 'high' }), /effort unsupported/); } finally { await runtime.close(); }
   assert.equal(created, false);
 });
+
+test('workspace tools are exposed by exact name and anything else stays denied', async () => {
+  let config;
+  const tools = ['workspace_read', 'workspace_edit'].map(name => ({ name, handler: async () => '{}' }));
+  const workspace = { describe: () => 'Workspace root: /r' };
+  const runtime = new CopilotRuntime(() => ({ start: async () => {}, forceStop: async () => {},
+    listModels: async () => [{ id: 'test' }],
+    createSession: async c => { config = c; return { on: () => () => {}, rpc: { tools: { initializeAndValidate: async () => {},
+      getCurrentMetadata: async () => ({ tools: tools.map(t => ({ name: t.name })) }) } } }; } }), tools, { workspace });
+  try {
+    await runtime.open('test', () => {});
+    assert.deepEqual(config.availableTools, ['custom:workspace_read', 'custom:workspace_edit']);
+    assert.deepEqual(config.excludedTools, ['builtin:*', 'mcp:*']);
+    for (const [name, decision] of [['workspace_read', 'allow'], ['workspace_edit', 'allow'], ['workspace_write', 'deny'], ['view', 'deny'], ['bash', 'deny']])
+      assert.equal((await config.hooks.onPreToolUse({ toolName: name })).permissionDecision, decision, name);
+    assert.match(config.systemMessage.content, /Staged edits are reviewed|workspace_\* tools/);
+    assert.match(config.systemMessage.content, /Workspace root: \/r/);
+  } finally { await runtime.close(); }
+});

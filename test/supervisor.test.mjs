@@ -154,3 +154,14 @@ test('session error interrupts a blocked send and cancel joins terminal cleanup'
  assert.equal(job.status,'failed');assert.equal(closed,true);assert.equal(job.cleanupComplete,true);
  const next=s.start({requestId:'after-error',model:'m',prompt:'x'});await s.cancel(next.jobId);
 });
+
+test('apply refuses when runtime shutdown is unconfirmed', async () => {
+  let release; const gate = new Promise(r => release = r);
+  const workspace = { spec: { read: [], write: ['a'] }, summary: () => ({}), freeze() {}, apply: async () => ({ applied: ['a'] }) };
+  const supervisor = new Supervisor(() => ({ open: async (m, onEvent) => ({ send: async () => { onEvent({ type: 'session.idle', data: {} }); } }),
+    close: async () => { throw Error('stop failed'); } }));
+  const job = supervisor.start({ requestId: 'r', prompt: 'p', model: 'm', workspace });
+  await supervisor.get(job.jobId).task;
+  await assert.rejects(supervisor.apply(job.jobId, 'f'.repeat(64)), /shutdown is unconfirmed/);
+  release();
+});

@@ -12,7 +12,7 @@ test('MCP tools negotiate, validate and dispatch without GitHub requests', async
   const [a, b] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(a), client.connect(b)]);
   try {
-    assert.equal((await client.listTools()).tools.length, 10);
+    assert.equal((await client.listTools()).tools.length, 12);
     const models = await client.callTool({ name: 'copilot_models', arguments: {} });
     assert.match(models.content[0].text, /test-model/);
     const invalid = await client.callTool({ name: 'copilot_start', arguments: { prompt: 'x' } });
@@ -83,4 +83,56 @@ test('failed orchestration before admission frees its request ID for retry', asy
     assert.equal(ok.isError, undefined);
     assert.equal(lookups, 71);
   } finally { await supervisor.close(); await client.close(); await server.close(); }
+});
+
+test('routed job with files stages an edit; changes then apply writes it through MCP', async () => {
+  const { mkdtemp, writeFile, readFile, rm, realpath } = await import('node:fs/promises');
+  const { join } = await import('node:path'); const { tmpdir } = await import('node:os');
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'mcp-ws-')));
+  await writeFile(join(root, 'a.js'), 'let x = 1;\n');
+  let seenPrompt;
+  const supervisor = new Supervisor(job => ({ close: async () => {}, open: async (model, onEvent) => ({
+    send: async ({ prompt }) => {
+      seenPrompt = prompt;
+      const tools = Object.fromEntries(job.workspace.tools().map(t => [t.name, t]));
+      await tools.workspace_read.handler({ path: 'a.js' });
+      await tools.workspace_edit.handler({ path: 'a.js', oldString: '1', newString: '2' });
+      onEvent({ type: 'tool.execution_start', data: { toolCallId: 'c1', toolName: 'workspace_read', arguments: { path: 'a.js' } } });
+      onEvent({ type: 'tool.execution_complete', data: { toolCallId: 'c1', success: true, result: { content: 'let x = 1;' } } });
+      onEvent({ type: 'session.idle', data: {} });
+    } }) }));
+  const { server } = createServer(supervisor, async () => [{ id: 'gpt-6.1-sol', supportedReasoningEfforts: ['medium', 'high'] }], { leadFamily: 'anthropic' });
+  const client = new Client({ name: 'ws', version: '1' }); const [a, b] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(a), client.connect(b)]);
+  const call = async (name, args) => { const r = await client.callTool({ name, arguments: args }); return { error: r.isError, data: r.isError ? r.content[0].text : JSON.parse(r.content[0].text) }; };
+  try {
+    const bad = await call('copilot_delegate', { requestId: 'w0', role: 'code_proposal', task: 't', context: 'c', acceptanceCriteria: 'a', sharingAuthorized: true, files: { root, read: ['../'] } });
+    assert.equal(bad.error, true);
+    const started = await call('copilot_delegate', { requestId: 'w1', role: 'code_proposal', task: 'bump x', context: 'see a.js', acceptanceCriteria: 'x is 2', sharingAuthorized: true, files: { root, read: ['.'], write: ['a.js'] } });
+    assert.equal(started.error, undefined);
+    const { jobId } = started.data;
+    let done, cursor = 0; const events = [];
+    for (let i = 0; i < 20; i++) {
+      done = await call('copilot_events', { jobId, after: cursor, waitMs: 500 });
+      events.push(...done.data.events); cursor = done.data.nextCursor;
+      if (done.data.status === 'completed' && !done.data.hasMore) break;
+    }
+    assert.equal(done.data.status, 'completed');
+    assert.match(seenPrompt, /Granted files[\s\S]*Writable \(staged/);
+    assert.ok(events.some(e => e.type === 'supervisor.file_access' && e.data.op === 'stage' && e.data.path === 'a.js'));
+    assert.deepEqual(done.data.workspace.staged.map(s => s.path), ['a.js']);
+    const toolEvents = events.filter(e => e.type.startsWith('tool.'));
+    assert.equal(toolEvents.length, 2);
+    assert.ok(toolEvents.every(e => e.data.redacted && !e.data.result && !e.data.arguments));
+    assert.ok(!JSON.stringify(events).includes('let x = 1;'));
+    assert.equal(await readFile(join(root, 'a.js'), 'utf8'), 'let x = 1;\n');
+    const changes = await call('copilot_changes', { jobId });
+    assert.match(changes.data.files[0].diff, /\+let x = 2;/);
+    assert.equal((await call('copilot_apply', { jobId, changeSetHash: 'f'.repeat(64) })).error, true);
+    const applied = await call('copilot_apply', { jobId, changeSetHash: changes.data.changeSetHash });
+    assert.deepEqual(applied.data.applied, ['a.js']);
+    assert.equal(await readFile(join(root, 'a.js'), 'utf8'), 'let x = 2;\n');
+    const plain = await call('copilot_start', { requestId: 's1', model: 'gpt-6.1-sol', prompt: 'p', sharingAuthorized: true });
+    assert.match((await call('copilot_changes', { jobId: plain.data.jobId })).data, /not granted files/);
+  } finally { await supervisor.close(); await client.close(); await server.close(); await rm(root, { recursive: true, force: true }); }
 });

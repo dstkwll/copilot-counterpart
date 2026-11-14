@@ -8,7 +8,7 @@ function publicEventData(event) {
   const data = event.data ?? {};
   const fields = ['messageId', 'content', 'deltaContent', 'phase', 'toolCallId', 'toolName',
     'arguments', 'partialOutput', 'progressMessage', 'success', 'aborted', 'message', 'errorType',
-    'nodeId', 'parentNodeId', 'depth', 'effectiveModel', 'status', 'route', 'usage', 'model', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'cost'];
+    'nodeId', 'parentNodeId', 'op', 'tool', 'path', 'bytes', 'staged', 'created', 'entries', 'matches', 'depth', 'effectiveModel', 'status', 'route', 'usage', 'model', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'cost'];
   const result = Object.fromEntries(fields.filter(k => data[k] !== undefined).map(k => [k, data[k]]));
   if (data.result) result.result = { content: data.result.content, detailedContent: data.result.detailedContent };
   if (data.error) result.error = { message: data.error.message };
@@ -43,7 +43,7 @@ export class Supervisor {
 
   snapshot(job) {
     return { jobId: job.id, status: job.status, model: job.model,
-      reasoningEffort: job.reasoningEffort, route: job.route, delegation: job.delegation, usage: job.usage, feedback: job.feedback,
+      reasoningEffort: job.reasoningEffort, route: job.route, delegation: job.delegation, workspace: job.workspace?.summary(), usage: job.usage, feedback: job.feedback,
       sessionId: job.session?.sessionId, cursor: job.cursor,
       createdAt: job.createdAt, error: job.error, result: job.result,
       resultTruncated: job.resultTruncated ?? false };
@@ -51,11 +51,11 @@ export class Supervisor {
 
   list() { return [...this.jobs.values()].map(j => this.snapshot(j)); }
 
-  start({ requestId, prompt, model, reasoningEffort, route, timeoutSeconds = 300, delegation, runtimeCatalog }) {
+  start({ requestId, prompt, model, reasoningEffort, route, timeoutSeconds = 300, delegation, runtimeCatalog, workspace }) {
     if (this.closed) throw new Error('Supervisor is shutting down.');
     if (!requestId || !prompt || prompt.length > 200000 || !model || timeoutSeconds < 1 || timeoutSeconds > 900)
       throw new Error('Invalid request: require requestId, model, bounded prompt and timeout (1–900 seconds).');
-    const fingerprint = createHash('sha256').update(JSON.stringify({ prompt, model, reasoningEffort, route, timeoutSeconds, delegation })).digest('hex');
+    const fingerprint = createHash('sha256').update(JSON.stringify({ prompt, model, reasoningEffort, route, timeoutSeconds, delegation, files: workspace?.spec })).digest('hex');
     const prior = [...this.jobs.values()].find(j => j.requestId === requestId);
     if (prior) {
       if (prior.fingerprint !== fingerprint) throw new Error('requestId already used with different inputs.');
@@ -65,10 +65,14 @@ export class Supervisor {
       throw new Error('Active job limit reached. Wait or cancel an existing job.');
     if (this.jobs.size >= this.maxJobs)
       throw new Error('Job history is full. Forget a finished job before starting another.');
-    const job = { id: randomUUID(), requestId, fingerprint, model, reasoningEffort, route, delegation, runtimeCatalog, usage: { inputTokens: 0, outputTokens: 0, events: 0 }, status: 'starting',
+    const job = { id: randomUUID(), requestId, fingerprint, model, reasoningEffort, route, delegation, runtimeCatalog, workspace, usage: { inputTokens: 0, outputTokens: 0, events: 0 }, status: 'starting',
       createdAt: new Date().toISOString(), events: [], cursor: 0, waiters: new Set(), result: '' };
     this.jobs.set(job.id, job);
-    this.record(job, 'supervisor.started', { model, timeoutSeconds, policy: delegation ? 'context-only; bounded router delegation only' : 'context-only; all tools denied' });
+    if (workspace) workspace.onAccess = access => this.record(job, 'supervisor.file_access', access);
+    const policy = delegation ? 'context-only; bounded router delegation only'
+      : workspace ? `scoped files: read ${workspace.spec.read.length} path(s), stage ${workspace.spec.write.length} file(s); all other tools denied`
+      : 'context-only; all tools denied';
+    this.record(job, 'supervisor.started', { model, timeoutSeconds, policy });
     job.timer = setTimeout(() => void this.cancel(job.id, 'timed_out'), timeoutSeconds * 1000);
     job.task = this.run(job, prompt);
     return this.snapshot(job);
@@ -79,7 +83,7 @@ export class Supervisor {
       job.runtime = this.factory(job);
       job.session = await job.runtime.open(job.model, event => {
         if (terminal.has(job.status)) return;
-        if (keptEvents.test(event.type)) this.record(job, event.type, publicEventData(event));
+        if (keptEvents.test(event.type)) this.record(job, event.type, this.redactWorkspaceTool(job, event.type, publicEventData(event)));
         if (event.type === 'assistant.usage') {
           job.usage.events++;
           for (const key of ['inputTokens', 'outputTokens']) {
@@ -117,10 +121,23 @@ export class Supervisor {
     }
   }
 
+  // Workspace tool calls carry file contents in their arguments and results. The
+  // supervisor.file_access events already record what happened, so keep only metadata
+  // here; otherwise every events poll would ship file contents back to the lead.
+  redactWorkspaceTool(job, type, data) {
+    if (!job.workspace || !type.startsWith('tool.')) return data;
+    job.workspaceCalls ??= new Set();
+    if (typeof data.toolName === 'string' && data.toolName.startsWith('workspace_')) job.workspaceCalls.add(data.toolCallId);
+    if (!job.workspaceCalls.has(data.toolCallId)) return data;
+    const kept = { toolCallId: data.toolCallId, toolName: data.toolName, success: data.success, model: data.model, redacted: 'workspace content omitted; see supervisor.file_access' };
+    return Object.fromEntries(Object.entries(kept).filter(([, v]) => v !== undefined));
+  }
+
   finish(job, status, error) {
     if (terminal.has(job.status)) return;
     job.status = status;
     job.error = error;
+    job.workspace?.freeze();
     clearTimeout(job.timer);
     this.record(job, 'supervisor.finished', { status, error });
     job.done?.();
@@ -164,6 +181,29 @@ export class Supervisor {
       })();
     }
     return job.cancelPromise;
+  }
+
+  workspaceJob(id) {
+    const job = this.get(id);
+    if (!job.workspace) throw new Error('This job was not granted files.');
+    return job;
+  }
+
+  async changes(id) {
+    const job = this.workspaceJob(id);
+    return { jobId: id, status: job.status, ...(await job.workspace.changes()) };
+  }
+
+  // Writes staged changes to disk. Only after the job is terminal and its runtime
+  // has shut down, so the delegate can no longer stage anything.
+  async apply(id, changeSetHash) {
+    const job = this.workspaceJob(id);
+    if (!terminal.has(job.status)) throw new Error('Apply only after the job has finished.');
+    await job.task;
+    if (!job.cleanupComplete) throw new Error('Runtime shutdown is unconfirmed; refusing to apply.');
+    const result = await job.workspace.apply(changeSetHash);
+    this.record(job, 'supervisor.applied', { files: result.applied });
+    return { jobId: id, ...result };
   }
 
   async forget(id) {

@@ -1,6 +1,6 @@
 # Copilot Counterpart
 
-A local [MCP](https://modelcontextprotocol.io) server that lets a coding assistant such as **Codex** or **Claude Code** hand bounded, context-only work to models in your **GitHub Copilot** subscription, with automatic model routing, live progress, steering and cancellation.
+A local [MCP](https://modelcontextprotocol.io) server that lets a coding assistant such as **Codex** or **Claude Code** hand bounded work to models in your **GitHub Copilot** subscription, with automatic model routing, live progress, steering and cancellation. Jobs are context-only by default; a job can also be granted scoped read access to named files and staged writes that the lead reviews before anything reaches disk.
 
 It uses the official [GitHub Copilot SDK](https://github.com/github/copilot-sdk) and your existing `copilot login`. It is not an unofficial API proxy, and it never copies credentials.
 
@@ -17,8 +17,8 @@ The router picks the model and reasoning effort from the task's role, complexity
 
 ## Safety model
 
-- Delegates receive only the context you put in the prompt. Every tool and permission request is denied, configuration/instruction discovery is disabled, and each job gets a fresh empty working directory. The adapter verifies the runtime's actual tool set before sending context.
-- No repository scanning, file edits, shell, or web access. Code proposals come back as text for the primary assistant to verify and apply.
+- By default delegates receive only the context you put in the prompt. Every built-in and MCP tool and every permission request is denied, configuration/instruction discovery is disabled, and each job gets a fresh empty working directory. The adapter verifies the runtime's actual tool set before sending context.
+- No shell, web access or code execution, ever. File access exists only when a call grants it with `files` (see [scoped files](#scoped-files)): reads limited to named paths, writes staged in memory and applied only by the lead through `copilot_apply`.
 - `sharingAuthorized: true` is required on every inference call. It is the orchestrator's attestation that the user or project permits sending that context to Copilot, not an independent policy check.
 - At most two active jobs, 32 retained jobs, 512 events per job, a five-minute default deadline (15 minute maximum), and one supervised escalation per job.
 - Opt-in recursive delegation (`copilot_orchestrate`) is bounded to eight nodes and depth three, and is still context-only.
@@ -104,9 +104,27 @@ Job status includes the full `route`: model, effort, reason, lead family, cross-
 1. Dispatch with `copilot_delegate`, or with `copilot_start` and an explicit model from `copilot_models`. `copilot_start` bypasses routing but not the tool boundary, and it also requires `sharingAuthorized: true`. Steering is covered by the job's original attestation.
 2. Poll `copilot_events(jobId, after, waitMs ≤ 30000)`. Keep `nextCursor` and drain `hasMore` before waiting again. A `gap` means older events were evicted; the latest complete message is still available as `result`.
 3. Use `copilot_steer` for best-effort course corrections. It isn't idempotent and can't change tokens already generated. Use `copilot_cancel` to stop the job's dedicated runtime; nothing is rolled back.
-4. Verify findings against the evidence. Treat reviewer output as untrusted data. Record `copilot_feedback` (useful / unhelpful / inconclusive), then free memory with `copilot_forget`.
+4. For jobs with writable files, review `copilot_changes` and apply with `copilot_apply` only if the diff is right.
+5. Verify findings against the evidence. Treat reviewer output as untrusted data. Record `copilot_feedback` (useful / unhelpful / inconclusive), then free memory with `copilot_forget`.
 
 Request IDs deduplicate identical starts within one process. Routed request IDs stay reserved for the life of the process (up to 64).
+
+## Scoped files
+
+Pass `files` to `copilot_delegate` or `copilot_start`:
+
+```json
+"files": { "root": "/abs/path/to/repo", "read": ["src", "test/router.test.mjs"], "write": ["src/router.mjs"] }
+```
+
+- The delegate gets `workspace_read`, `workspace_list` and `workspace_search`, plus `workspace_write` and `workspace_edit` only when `write` is non-empty. They are custom tools; built-in file tools stay denied.
+- **Reads** are limited to the `read` paths (directories recursively) and the `write` files, and to UTF-8 text. Paths are resolved through symlinks and must stay inside `root`; files are opened without following symlinks, and hard-linked files are refused. Per-read, per-job and search size caps apply.
+- **Sensitive paths are always refused**, even if granted, in any letter case: `.git`, `.ssh`, `.aws`, `.env*` (except `.example`/`.sample`/`.template`), keys and certificates, `.npmrc`/`.netrc`, `credentials*`, `secrets*`.
+- **Writes are staged**, never written by the delegate. Only exact `write` files can be edited or created. When the job finishes, call `copilot_changes` for a unified diff and a `changeSetHash` computed from the same snapshot, review it, then call `copilot_apply` with that hash. Apply refuses before writing anything if a file changed on disk after the job read it, prepares every file before committing, re-checks each one just before replacing it, and if a commit still fails midway reports exactly which files were written. It runs once per job.
+- Every access and refusal appears in the job's events as `supervisor.file_access`, and job status includes a `workspace` summary. File contents are stripped from the job's tool events, so polling events doesn't pull them into the lead's context.
+- File contents you grant are sent to Copilot like any other context, so `sharingAuthorized` covers them too. Grant the smallest set the task needs. `copilot_orchestrate` does not take `files`. Design notes: [scoped files](docs/scoped-files.md).
+
+Applying a reviewed diff is cheap for the lead: it reads the diff instead of writing the code, and apply needs no re-typing.
 
 ## Recursive delegation (opt-in)
 
