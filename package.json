@@ -1,6 +1,6 @@
 {
   "name": "copilot-supervisor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -15,5 +15,10 @@
     "@github/copilot-sdk": "1.0.13",
     "@modelcontextprotocol/sdk": "1.30.0",
     "zod": "4.5.4"
+  },
+  "description": "Local MCP server for supervised, context-only GitHub Copilot delegation with cross-family model routing.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dstkwll/copilot-supervisor.git"
   }
 }

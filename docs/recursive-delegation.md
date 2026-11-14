@@ -1,10 +1,10 @@
 # Recursive Copilot delegation
 
-Implemented and tested on 2026-09-16. Installed runtime rollout is separate.
+Opt-in, context-only recursive delegation through the host router.
 
 ## User-visible contract
 
-A lead can divide work and call the same model router used by the outer assistant. Explicitly choosing Astra affects the lead only. Each handoff states task, context, acceptance criteria, role, complexity, risk, and whether that child may delegate. Child leads may repeat the process within the original limits. Leaves receive no tools.
+A lead can divide work and call the same model router used by the outer assistant. Explicitly choosing a lead model (for example Astra) affects the lead only. Children inherit the outer call's `leadFamily`. Each handoff states task, context, acceptance criteria, role, complexity, risk, and whether that child may delegate. Child leads may repeat the process within the original limits. Leaves receive no tools.
 
 The opt-in MCP entry is `copilot_orchestrate`. Existing leaf APIs remain available. Completion, cancellation, steering and event polling use the outer job ID. The source skill explains how an assistant selects this path; installing source changes alone does not update an already-running MCP server or installed skill.
 
@@ -28,9 +28,9 @@ The implementation uses a single SDK custom `delegate_task` tool with a strict s
 
 ## Verification
 
-Forty offline tests cover existing leaf behavior and MCP negotiation, authorization, model validation, recursive routing, individually denied recursion, admission/depth limits, duplicate calls, result truncation, model/usage failure, active-grandchild cancellation, late startup, failed first stop, blocked-send interruption and cleanup capacity.
+Offline tests cover existing leaf behavior and MCP negotiation, authorization, model validation, recursive routing, individually denied recursion, admission/depth limits, duplicate calls, result truncation, model/usage failure, active-grandchild cancellation, late startup, failed first stop, blocked-send interruption and cleanup capacity.
 
-Live MCP synthetic proof: Astra/high -> Luna/medium -> Luna/medium; the grandchild computed 17+25 and returned 42 through its parents. Requested and effective model receipts agreed at all three levels. The first successful run reported 2,633 input and 279 output tokens across five usage events. This arithmetic test demonstrates capability, not economic benefit.
+Live MCP synthetic proof (policy v2 models): Astra/high -> Luna/medium -> Luna/medium; the grandchild computed 17+25 and returned 42 through its parents. Requested and effective model receipts agreed at all three levels. This arithmetic test demonstrates capability, not economic benefit.
 
 A second synthetic run cancelled after the depth-two node was admitted. The outer job reported cancelled and could be forgotten only after confirmed cleanup. Reproduce with:
 

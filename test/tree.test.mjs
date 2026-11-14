@@ -18,7 +18,7 @@ function harness(behavior, limits={}, options={}) {
       }};
     },
     close:async()=>{if(!node.stopped){node.stopped=true;stopped.push(node);}if(options.cleanupFailure)throw Error('cleanup failure');}
-  }),options.catalog??catalog(),{}));
+  }),options.catalog??catalog(),options.routing??{}));
   const original=outer.record.bind(outer);
   outer.record=(job,type,data)=>{events.push({type,data});original(job,type,data);};
   const result=outer.start({requestId:'root',prompt:'synthetic',model:'gpt-6-astra',reasoningEffort:'high',timeoutSeconds:options.timeout??20,delegation:limits});
@@ -132,4 +132,14 @@ test('child results are capped before returning to the parent',async()=>{
   }}),close:async()=>{}
  }),catalog()));
  const j=outer.get(outer.start({requestId:'long',prompt:'x',model:'gpt-6-astra',timeoutSeconds:10}).jobId);await j.task;assert.equal(j.status,'completed');
+});
+
+test('children inherit the lead family: anthropic-led sparring routes to Astra, review to Sol',async()=>{
+ const h=harness(async({tree,node})=>{
+  if(node.depth)return;
+  await tree.tool(node).handler({...brief(),role:'sparring',complexity:'normal'},{toolCallId:'spar'});
+  await tree.tool(node).handler({...brief(),role:'review',complexity:'normal'},{toolCallId:'rev'});
+ },{},{routing:{leadFamily:'anthropic'}});
+ await h.job.task;
+ assert.deepEqual(h.opened.map(x=>x.model),['gpt-6-astra','gpt-6-astra','gpt-6-sol']);
 });

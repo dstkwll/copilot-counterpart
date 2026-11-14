@@ -1,133 +1,139 @@
 # Copilot Supervisor
 
-A local stdio MCP bridge for supervised, context-only GitHub Copilot reviews and small analytical delegations. Uses the official Copilot SDK and its bundled runtime, not an unofficial model API proxy.
+A local [MCP](https://modelcontextprotocol.io) server that lets a coding assistant such as **Codex** or **Claude Code** hand bounded, context-only work to models in your **GitHub Copilot** subscription, with automatic model routing, live progress, steering and cancellation.
 
-This is an **AI-maintained repository**. Agents handle routine implementation, tests, review, documentation and direct commits to `main`; the owner is involved only for missing authority or material risk/scope decisions. See [AGENTS.md](AGENTS.md) for the operating boundaries.
+It uses the official [GitHub Copilot SDK](https://github.com/github/copilot-sdk) and your existing `copilot login`. It is not an unofficial API proxy, and it never copies credentials.
 
-See [model routing](docs/model-routing.md) for role assignments, Sonnet's probationary trial, escalation rules and the roadmap. Automatic model/effort selection is implemented in `copilot_delegate`; it is triggered during an active assistant task, not by a background scheduler.
+## Why
 
-## Current scope
+Your primary assistant stays the thinking partner and decision-maker. Copilot gives it cheap access to *other* models for:
 
-- Start background jobs using a model returned by `copilot_models`.
-- Prefer `copilot_delegate` to select the model and reasoning effort automatically by role, complexity and risk. Routing explanations are included in job status. Model policy and effort support are checked before inference.
-- Supply `sharingAuthorized: true` only when the user/project has authorized sending that context to Copilot. It is an attestation by the orchestrator, not independent employer-policy enforcement.
-- One explicit escalation from a finished routed job is supported through `parentJobId`; there are no autonomous retries or debates. `copilot_feedback` records useful/unhelpful/inconclusive outcomes.
-- Read streamed text and status through cursor-based `copilot_events` long polling.
-- Send immediate steering messages and cancel a dedicated job runtime.
-- Request IDs deduplicate identical starts for this process's retained history.
-- Two active jobs maximum, 32 retained jobs, 512 events per job. Old event loss and truncation are reported. Defaults to a five-minute deadline; maximum 15 minutes.
-- For ordinary leaf jobs, all delegate tools are disabled. The adapter checks the actual runtime tool set before sending context, denies every permission request and pre-tool call, disables configuration/instruction discovery, and uses a fresh temporary working directory.
+- **independent review** of a meaningful change,
+- **correctness checks** (races, lifecycle, invariants),
+- **design sparring** before a consequential decision,
+- **bounded analysis or code proposals** returned as text.
 
-The orchestrator supplies selected excerpts, diffs or requirements in `prompt`. No automatic repository scanning, file editing, commands, web access, or permission-approval endpoint is exposed. Nested context-only agents require the explicit `copilot_orchestrate` entry point described below. Suggested fixes come back as text for the orchestrator to verify and apply within the user's authorization. These are SDK-level restrictions, not an OS sandbox against a compromised SDK/runtime.
+The router picks the model and reasoning effort from the task's role, complexity and risk, and sends independent work to a **different model family from the lead**, so a Claude-led session gets a GPT second opinion and a Codex-led session gets a Claude one.
 
-## Setup
+## Safety model
 
-Requires Node 22+ and a Copilot subscription/login. Dependencies are pinned and locked:
+- Delegates receive only the context you put in the prompt. Every tool and permission request is denied, configuration/instruction discovery is disabled, and each job gets a fresh empty working directory. The adapter verifies the runtime's actual tool set before sending context.
+- No repository scanning, file edits, shell, or web access. Code proposals come back as text for the primary assistant to verify and apply.
+- `sharingAuthorized: true` is required on every inference call. It is the orchestrator's attestation that the user or project permits sending that context to Copilot, not an independent policy check.
+- At most two active jobs, 32 retained jobs, 512 events per job, a five-minute default deadline (15 minute maximum), and one supervised escalation per job.
+- Opt-in recursive delegation (`copilot_orchestrate`) is bounded to eight nodes and depth three, and is still context-only.
+
+These are SDK-level restrictions, not an OS sandbox against a compromised SDK or runtime.
+
+## Install
+
+Requires Node 22+ and a GitHub Copilot subscription.
 
 ```sh
+git clone https://github.com/dstkwll/copilot-supervisor.git
+cd copilot-supervisor
 npm ci --ignore-scripts
 npm test
+copilot login   # only if you are not already authenticated
 ```
 
-Use `copilot login` if authentication is missing. The SDK reuses local authentication; no credential is copied into this project. An authentication error inside a restricted execution sandbox can also indicate blocked network/keychain access.
+Register the server with each assistant using **absolute paths**. Set `COPILOT_SUPERVISOR_LEAD_FAMILY` to the assistant's own model family so the router can pick a different family for reviews.
 
-Register the MCP server with an absolute Node executable and absolute path to `src/server.mjs`:
+### Codex
 
 ```sh
-codex mcp add copilot-supervisor -- /absolute/path/to/node /absolute/path/to/copilot-supervisor/src/server.mjs
+codex mcp add copilot-supervisor \
+  --env COPILOT_SUPERVISOR_LEAD_FAMILY=openai \
+  -- "$(command -v node)" "$PWD/src/server.mjs"
 ```
 
-Open a new Codex thread to pick up the tools. Do not also install the plugin scaffold's MCP entry, which would create a second independent server/history. `.codex-plugin/plugin.json` is included for future plugin packaging; the initial installation uses direct local MCP registration.
+Or in `~/.codex/config.toml`:
 
-The installed server can be a separate copy from the development checkout; source edits do not update it, so refresh it deliberately after verification.
+```toml
+[mcp_servers.copilot-supervisor]
+command = "/absolute/path/to/node"
+args = ["/absolute/path/to/copilot-supervisor/src/server.mjs"]
+env = { COPILOT_SUPERVISOR_LEAD_FAMILY = "openai" }
+```
 
-## Cross-session rollout
+### Claude Code
 
-The source skill is [copilot-delegation](skills/copilot-delegation/SKILL.md). Install it into the user's Codex skills directory with the bundled skill-installer helper, using this private repository and `--path skills/copilot-delegation`. The installed copy is not automatically updated by git pulls; reinstall/update it deliberately after changes.
+```sh
+claude mcp add copilot-supervisor --scope user \
+  -e COPILOT_SUPERVISOR_LEAD_FAMILY=anthropic \
+  -- "$(command -v node)" "$PWD/src/server.mjs"
+```
 
-Local global `~/.codex/AGENTS.md` guidance tells sessions to consider this skill naturally for meaningful reviews, design sparring and bounded analytical work, honor opt-outs, and show actual start/terminal receipts. This is assistant guidance, not a deterministic hook or background scheduler. Fresh sessions are the acceptance target; existing tasks may need a new turn or restart to load changes. Other machines, accounts and cloud environments need their own setup.
+Each host starts its own server process. Jobs, request IDs and feedback are not shared between hosts.
 
-Receipts are assistant commentary based on real tool responses, not server-rendered notifications. Completed inference is distinguished from independently verified findings. The primary assistant remains responsible for verification and authorized implementation.
+### Skill (recommended)
 
-Verified after the app restart on 2026-09-09: this Codex session discovered and successfully invoked the native supervisor MCP tools.
+[`skills/copilot-delegation`](skills/copilot-delegation/SKILL.md) tells the assistant when to delegate, how to supervise, and how to report receipts. It works for both hosts:
 
-## Supervising a task
+```sh
+mkdir -p ~/.codex/skills ~/.claude/skills
+ln -s "$PWD/skills/copilot-delegation" ~/.codex/skills/copilot-delegation
+ln -s "$PWD/skills/copilot-delegation" ~/.claude/skills/copilot-delegation
+```
 
-### Preferred: automatic routing
+The skill defers to *your* sharing authorization. To let the assistant delegate without asking each time, state it in your own global instructions (`~/.codex/AGENTS.md` or `~/.claude/CLAUDE.md`). For example: "You may send task-relevant code and context to my authenticated GitHub Copilot service for reviews and delegations; never include secrets."
 
-Call `copilot_delegate` with `requestId`, `role`, `task`, `context`, `acceptanceCriteria`, and `sharingAuthorized: true`. Optional `complexity` is small/normal/complex (default normal); `risk` is low/high (default low). Select role:
+Start a new session after registering so the tools and skill are picked up. Already-running server processes keep the routing policy they loaded.
 
-| Role | Normal starting model | Notes |
-| --- | --- | --- |
-| review | Sonnet 5 high (trial) | Sol after three trials or an unhelpful trial; high-risk review uses Opus |
-| correctness | Sol high | Independent defect/invariant checking |
-| sparring | Opus 5 high | Counterarguments and alternatives |
-| analysis / code_proposal | Terra medium | Luna for small work, Sol high for complex/high-risk work |
+## Routing (policy v3)
 
-Code proposals are returned as text, never executed. Unavailable/disabled models or unsupported effort cause a documented fallback within the same route, or fail closed. No pricing-based routing is performed. Catalog lookup errors do not trigger inference retries.
+`copilot_delegate` takes `requestId`, `role`, `task`, `context`, `acceptanceCriteria`, `sharingAuthorized: true`, and optional `complexity` (small/normal/complex), `risk` (low/high), `leadFamily` (`openai`/`anthropic`, overriding the server default), `parentJobId` and `timeoutSeconds`.
 
-Poll events, verify the outcome, and call `copilot_feedback`. To escalate, call `copilot_delegate` with a fresh request ID, the completed/failed `parentJobId`, and a corrected self-contained task brief; previous output is not automatically forwarded. Cancelled and timed-out jobs cannot be escalated. The maximum chain is two jobs, and Opus is the ceiling.
+| Role | Claude lead (`anthropic`) | Codex lead (`openai`) | No lead configured |
+| --- | --- | --- | --- |
+| review | GPT-6.1 Sol high | Claude Opus 5.5 high | GPT-6.1 Sol high |
+| correctness | GPT-6.1 Sol high | Claude Opus 5.5 high | GPT-6.1 Sol high |
+| sparring, high-risk review | GPT-6 Astra high | Claude Opus 5.5 high | Claude Opus 5.5 high |
+| analysis / code_proposal, small | GPT-6 Luna medium | same | same |
+| analysis / code_proposal, normal | GPT-6.1 Sol medium | same | same |
+| analysis / code_proposal, complex or high risk | GPT-6.1 Sol high | same | same |
 
-Sonnet trial counts, negative-feedback disablement and routing retry records are process-local and reset on restart. This is not a durable learning system. Negative feedback disables further trials in that process; positive feedback never promotes the model automatically. Routed request IDs remain reserved for the process lifetime (maximum 64); forgetting the underlying job does not silently rerun it.
+- **Fallbacks.** If a model is missing, disabled, or doesn't support the effort, the router tries the next candidate in the same route: GPT-6.1 Sol, then GPT-6 Sol, then the strongest model of the other family. The route reports `fallback: true`, and `crossFamily: false` when it had to use the lead's own family. If nothing qualifies, it fails closed without starting inference. It never silently picks an older-generation model.
+- **Escalation.** You can escalate a finished routed job once, with `parentJobId` and a fresh self-contained brief. Luna escalates to Sol, and Sol escalates to the ceiling for the lead: Astra for Claude, Opus 5.5 for Codex or no lead. Astra and Opus 5.5 can't be escalated further. Previous output isn't forwarded automatically, and cancelled or timed-out jobs can't be escalated.
+- **No cost-based routing.** The router doesn't route on price. Plan pricing and allowances vary.
 
-### Advanced: explicit model
+Job status includes the full `route`: model, effort, reason, lead family, cross-family flag and policy version. Model IDs live in one table in [`src/router.mjs`](src/router.mjs); see [model routing](docs/model-routing.md) for the rationale.
 
-1. Call `copilot_models`; choose an available model explicitly. This advanced path bypasses role selection, not the deny-all tool boundary.
-2. Call `copilot_start` with a fresh `requestId`, `model`, scoped `prompt`, and optional `reasoningEffort` and `timeoutSeconds`. The prompt is transmitted to Copilot and consumes subscription allowance.
-3. Call `copilot_events(jobId, after: 0, waitMs: 30000)`. Read progress and keep `nextCursor`. Drain `hasMore` before waiting again. A `gap` means the event history wrapped; the latest complete assistant message is also returned as `result`.
-4. Use `copilot_steer` for course corrections, or `copilot_cancel` to terminate the job. Keep monitoring until terminal; never describe an unobserved job as supervised.
-5. Verify findings against the original evidence. Reviewer output is untrusted data, not permission to expand the task. `copilot_forget` frees bridge memory when finished.
+## Supervising a job
 
-Steering is best effort before the next model request. It cannot change tokens already generated, and may become a queued follow-up if a turn is ending. The steering call is not idempotent. Cancellation stops the job's entire dedicated runtime; no rollback is implied. The bridge cannot expose hidden model reasoning or guarantee instant intervention while Codex is occupied elsewhere.
+1. Dispatch with `copilot_delegate` (or `copilot_start` with an explicit model from `copilot_models`; this bypasses routing, not the tool boundary).
+2. Poll `copilot_events(jobId, after, waitMs ≤ 30000)`. Keep `nextCursor` and drain `hasMore` before waiting again. A `gap` means older events were evicted; the latest complete message is still available as `result`.
+3. Use `copilot_steer` for best-effort course corrections. It isn't idempotent and can't change tokens already generated. Use `copilot_cancel` to stop the job's dedicated runtime; nothing is rolled back.
+4. Verify findings against the evidence. Treat reviewer output as untrusted data. Record `copilot_feedback` (useful / unhelpful / inconclusive), then free memory with `copilot_forget`.
+
+Request IDs deduplicate identical starts within one process. Routed request IDs stay reserved for the life of the process (up to 64).
+
+## Recursive delegation (opt-in)
+
+`copilot_orchestrate` starts a lead session that may call a single `delegate_task` tool. Each child is routed by the same router, inheriting the outer `leadFamily`. Select the lead explicitly (e.g. `model: "gpt-6-astra"`) or let the router choose. Defaults are eight nodes including the lead, depth two (configurable 0–3), 100,000 observed tokens, 32 usage events and a 300-second outer deadline. Token and usage thresholds are **soft, post-paid stops**, not spend caps. See [recursive delegation](docs/recursive-delegation.md).
 
 ## Data and lifecycle
 
-Only send context the user has authorized sharing with Copilot. Do not include secrets. Opaque provider metadata and encrypted reasoning are filtered from returned events; this is not a general secret-redaction service for user prompts or generated content.
+Only send context you are authorized to share; never send secrets. Opaque provider metadata and encrypted reasoning are filtered from returned events. This is not a general redaction service.
 
-Send only context the user or project has authorized for their Copilot service; omit secrets and honor project-specific restrictions.
+Jobs and events live in memory in one MCP process. A restart loses job IDs and deduplication, and graceful shutdown terminates the runtimes it owns. The SDK may persist sessions and logs under `~/.copilot`, and `copilot_forget` doesn't delete them. Token usage is aggregated from observed usage events; it isn't an invoice, and missing events don't prove zero consumption.
 
-Bridge jobs and events are in memory, scoped to one MCP process. Restart loses job IDs and retry deduplication; graceful shutdown terminates owned runtimes. The SDK may persist sessions/logs in `~/.copilot`; `copilot_forget` does not delete that storage. Temporary empty work directories are removed at shutdown. No durable resume, automatic retry, unattended review loop, or hard monetary cap is implemented. A timeout limits duration, not exact spend.
-
-Job status aggregates observed input/output token usage events (not a complete invoice). Missing usage events do not prove zero consumption. No conversion of SDK cost fields into employer dollar charges is assumed.
-
-## Verification
+## Development
 
 ```sh
-npm test
-npm run smoke -- --live gpt-5.4-mini
-node scripts/live-controls.mjs --live
+npm test                                     # offline, no inference
+npm run smoke -- --live gpt-6-luna           # one synthetic inference
+node scripts/live-controls.mjs --live        # steering and cancellation while streaming
 node scripts/review-routing.mjs --live --synthetic
+node scripts/probe-tree.mjs --live           # three-node recursive probe
 ```
 
-Offline tests cover event streaming/pagination, long-poll wakeups, request deduplication, concurrency/history limits, cancellation during startup, failure/timeout handling, permission denial, runtime tool-set verification, and real MCP stdio negotiation. Live tests use only synthetic context and consume allowance. The controls test checks SDK steering acceptance and cancellation while output is streaming, not guaranteed compliance with a correction.
+Live scripts use synthetic context, consume Copilot allowance, and never run in CI. `review-routing.mjs --live` without `--synthetic` sends this repository's source to Copilot. Contributor and agent guidance is in [AGENTS.md](AGENTS.md).
 
-Verified locally on 2026-09-09: offline tests passed; `gpt-5.4-mini` returned a streamed synthetic-code review with no tools available; the live control test successfully delivered immediate steering and terminated the runtime after output began. Codex MCP registration was verified. Pickup inside a new Codex app thread remains a separate integration check.
+## Credits
 
-## Design references
+- [GitHub Copilot SDK](https://github.com/github/copilot-sdk): runtime lifecycle, authentication, sessions and event streaming.
+- [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk): schema validation and stdio transport.
+- Design references (no code copied): [copilot-plugin-cc](https://github.com/wagnersza/copilot-plugin-cc) job control and [copilot-sdk-proxy](https://github.com/theblixguy/copilot-sdk-proxy) streaming/model discovery.
 
-- [Official GitHub Copilot SDK](https://github.com/github/copilot-sdk): reused as a pinned dependency for runtime lifecycle, authentication, sessions and event streaming.
-- [Official MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk): reused for schema validation and stdio transport.
-- [copilot-plugin-cc job control](https://github.com/wagnersza/copilot-plugin-cc/blob/4837b0b4e230e9fab93727d9a99f2d78e1f9673c/plugins/copilot/scripts/lib/job-control.mjs): design reference for separate job status/results/cancellation and progress previews. No community source code copied.
-- [copilot-sdk-proxy](https://github.com/theblixguy/copilot-sdk-proxy): examined its streaming/model-discovery approach. Its HTTP provider translation and broad tool defaults are outside this bridge's scope.
-
-The routed synthetic smoke test exercised the real stdio MCP path and automatically selected Sol high successfully on 2026-09-09. `scripts/review-routing.mjs --live` sends relevant repository source to Copilot; use `--synthetic` for a no-source smoke test.
-
-A subsequent Sol-high source review completed and produced two confirmed lifecycle fixes; see [review disposition](docs/review-2026-09-09.md). Runtime slots now remain occupied until cleanup is confirmed, and failed cleanup cannot be forgotten to bypass the limit.
-
-Next increments should preserve these boundaries: durable feedback/policy state, scoped repository snapshots, durable job recovery, and only then isolated editing with explicit approval checkpoints.
-
-## Model-initiated delegation (opt-in)
-
-`copilot_orchestrate` starts a lead that can call `delegate_task`. Select the lead explicitly (for example `model: "gpt-6-astra", reasoningEffort: "high"`) or omit model/effort to use the normal role/complexity/risk router. Supply `requestId`, `prompt`, and `sharingAuthorized: true`. No installed runtime is upgraded automatically.
-
-The model writes a bounded task/context/acceptance brief and selects role, complexity and risk. The host router chooses each child's model and effort from the authenticated catalog snapshot captured for this request. Each session checks the selected model/effort against the current catalog before inference; a stale choice fails rather than silently switching. The lead may set `allowDelegation: true` on selected handoffs; otherwise children are leaves. Each descendant uses the same router and remaining tree allowance. This is separate from the existing finished-job escalation API.
-
-Defaults: root depth 0, maximum depth 2 (configurable 0–3), eight total admitted nodes including root (configurable 1–8), 100,000 observed input/output tokens (maximum 200,000), 32 observed usage events (maximum 64), and a 300-second outer deadline (maximum 900). These are supplied in `limits` except `timeoutSeconds`. Failed admissions are not refunded. There is no launch queue: cap violations return a rejection. Waiting parents count as resident sessions; there is no deadlock on an execution semaphore. Two outer jobs can therefore own at most sixteen sessions in total. This is an explicit expansion from the old two-session bound only for opt-in trees.
-
-Only the SDK custom `delegate_task` tool is exposed; native task, files, shell, MCP and network tools remain disabled. Exact tool metadata is checked before prompts are sent. Every agent loop, session and authentication request is owned by the official Copilot SDK. A tree-wide failure/cancel closes admission and stops descendants, including late startup. Unconfirmed cleanup keeps the outer capacity occupied.
-
-Use existing `copilot_events`, `copilot_cancel`, `copilot_steer` and `copilot_forget` with the outer job ID. Node events report lineage, depth, route, effective model and usage. Child results are capped at 12,000 characters before returning to their parent. Whole transcripts are not inherited. Orchestration request IDs remain reserved for the process lifetime (up to 64), even after failures or forgetting.
-
-Explicit lead selection has no fallback. Descendants use the existing router's documented availability fallback and report it. Usage-model mismatch or missing model evidence prevents accepted completion. Evidence may arrive after a charge: observed-token and usage-event limits are **soft post-paid stops**, not prepaid dollar caps. Missing/delayed usage and in-flight output can overshoot; no exact billing or savings claim is made.
-
-Offline: `npm test`. Synthetic live MCP proof: `node scripts/probe-tree.mjs --live` (three sessions, 150 seconds, consumes allowance). Live inference is never part of the default tests. See [recursive delegation evidence](docs/recursive-delegation.md).
+Not affiliated with GitHub, OpenAI or Anthropic.

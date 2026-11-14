@@ -5,19 +5,27 @@ import { pathToFileURL } from 'node:url';
 import { Supervisor } from './supervisor.mjs';
 import { CopilotRuntime, listModels } from './copilot.mjs';
 import { DelegationTree, treeLimits } from './tree.mjs';
-import { Router, delegateSchema, chooseRoute } from './router.mjs';
+import { Router, delegateSchema, chooseRoute, LEAD_FAMILIES } from './router.mjs';
 
-export function createServer(supervisor, models = listModels) {
+export function resolveLeadFamily(value = process.env.COPILOT_SUPERVISOR_LEAD_FAMILY) {
+  if (!value) return undefined;
+  const family = value.trim().toLowerCase();
+  if (LEAD_FAMILIES.includes(family)) return family;
+  process.stderr.write(`copilot-supervisor: ignoring unknown COPILOT_SUPERVISOR_LEAD_FAMILY=${JSON.stringify(value)}; expected ${LEAD_FAMILIES.join(' or ')}.\n`);
+  return undefined;
+}
+
+export function createServer(supervisor, models = listModels, { leadFamily = resolveLeadFamily() } = {}) {
   let router;
   supervisor ??= new Supervisor(job => {
     if (!job.delegation) return new CopilotRuntime();
-    const tree = new DelegationTree(job.delegation, node => new CopilotRuntime(undefined, tree.tool(node)), job.runtimeCatalog, router);
+    const tree = new DelegationTree(job.delegation, node => new CopilotRuntime(undefined, tree.tool(node)), job.runtimeCatalog, { leadFamily: job.route?.leadFamily });
     return tree;
   });
-  const server = new McpServer({ name: 'copilot-supervisor', version: '0.1.0' }, {
+  const server = new McpServer({ name: 'copilot-supervisor', version: '0.2.0' }, {
     instructions: 'Use copilot_delegate for authorized bounded reviews after meaningful changes, design sparring before consequential decisions, or well-specified analysis/code proposals. Skip trivial work. Routing selects model/effort; keep the primary assistant as decision-maker. Check project sharing authorization, supply only relevant non-secret context, poll progress, verify findings, and provide feedback. Never infer employer permission, grant file access, or launch unattended loops. One supervised escalation is permitted. copilot_orchestrate explicitly enables bounded recursive context-only delegation. The bridge does not implement or execute code.'
   });
-  router = new Router(supervisor, models);
+  router = new Router(supervisor, models, { leadFamily });
   const register = (name, description, inputSchema, handler) => server.registerTool(name,
     { description, inputSchema }, async args => {
       try { return { content: [{ type: 'text', text: JSON.stringify(await handler(args)) }] }; }
@@ -32,6 +40,7 @@ export function createServer(supervisor, models = listModels) {
     sharingAuthorized: z.literal(true), model: z.string().min(1).max(128).optional(),
     reasoningEffort: z.enum(['none', 'low', 'medium', 'high', 'xhigh', 'max']).optional(),
     role: delegateSchema.role.default('analysis'), complexity: delegateSchema.complexity, risk: delegateSchema.risk,
+    leadFamily: delegateSchema.leadFamily,
     limits: treeLimits.default({ maxNodes: 8, maxDepth: 2, maxObservedTokens: 100000, maxUsageEvents: 32 }),
     timeoutSeconds: delegateSchema.timeoutSeconds
   }, async args => {
@@ -45,17 +54,17 @@ export function createServer(supervisor, models = listModels) {
     const promise = (async () => {
       const catalog = await models();
       if (!args.model && args.reasoningEffort) throw Error('Specify a lead model when overriding reasoning effort.');
-      const route = args.model ? { model: args.model, reasoningEffort: args.reasoningEffort ?? 'high', reason: 'Explicit lead selection; descendants use router.' } : chooseRoute(args, catalog, router);
+      const lead = args.leadFamily ?? leadFamily;
+      const route = args.model ? { model: args.model, reasoningEffort: args.reasoningEffort ?? 'high', leadFamily: lead, reason: 'Explicit lead selection; descendants use router.' } : chooseRoute(args, catalog, { leadFamily: lead });
       const selected = catalog.find(m => m.id === route.model && (!m.policy || m.policy.state === 'enabled') && m.supportedReasoningEfforts?.includes(route.reasoningEffort));
       if (!selected) throw Error('Lead model/effort unavailable; no fallback.');
       const result = supervisor.start({ requestId: `tree:${args.requestId}`, prompt: args.prompt, model: route.model, reasoningEffort: route.reasoningEffort, route, delegation: args.limits, runtimeCatalog: catalog, timeoutSeconds: args.timeoutSeconds });
-      if (route.trial) router.sonnetTrials++;
       return result;
     })();
     orchestrationRequests.set(args.requestId, { fingerprint, promise });
     return promise;
   });
-  register('copilot_feedback', 'Record the orchestrator-verified outcome of a finished routed job. An unhelpful Sonnet review disables its trial for this server process. Does not send inference or automatically promote models.', {
+  register('copilot_feedback', 'Record the orchestrator-verified outcome of a finished routed job (process-local). Does not send inference or change routing.', {
     jobId, outcome: z.enum(['useful', 'unhelpful', 'inconclusive'])
   }, ({ jobId, outcome }) => router.feedback(jobId, outcome));
   register('copilot_start', 'Start a supervised context-only review or analysis. Sends supplied prompt to GitHub Copilot and consumes its allowance. No files or commands can be accessed. Supply only task-relevant, non-secret context. Returns immediately; poll copilot_events until terminal. Reuse requestId only for identical retries.', {

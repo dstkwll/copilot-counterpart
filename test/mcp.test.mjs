@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { createServer } from '../src/server.mjs';
+import { createServer, resolveLeadFamily } from '../src/server.mjs';
 import { Supervisor } from '../src/supervisor.mjs';
 
 test('MCP tools negotiate, validate and dispatch without GitHub requests', async () => {
@@ -43,4 +43,14 @@ test('orchestration requires sharing, validates model, deduplicates and exposes 
   assert.equal((await call({...args,requestId:'unavailable',model:'unknown'})).isError,true);
   assert.equal(supervisor.jobs.size,1);
  } finally {await supervisor.close();await client.close();await server.close();}
+});
+
+test('COPILOT_SUPERVISOR_LEAD_FAMILY is normalized; unknown values are ignored', () => {
+  assert.equal(resolveLeadFamily(undefined), undefined);
+  assert.equal(resolveLeadFamily(' Anthropic '), 'anthropic');
+  assert.equal(resolveLeadFamily('openai'), 'openai');
+  const write = process.stderr.write; let warned = '';
+  process.stderr.write = chunk => { warned += chunk; return true; };
+  try { assert.equal(resolveLeadFamily('gemini'), undefined); } finally { process.stderr.write = write; }
+  assert.match(warned, /ignoring unknown/);
 });

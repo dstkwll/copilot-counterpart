@@ -1,20 +1,24 @@
-# AI-maintained repository
+# Agent and contributor guidance
 
-The owner intends this repository to be handled entirely by AI agents, with minimal routine human involvement. Agents own implementation, tests, documentation, review, and maintenance of the requested work. Commit verified changes directly to `main` and push to the existing private origin; no routine PR or owner review is required.
+These instructions apply to this repository only. They work for any coding agent (Codex, Claude Code, Copilot) and for humans.
 
-This is operating guidance, not authorization for unattended scheduled work. Ask the owner only for missing authority, credentials, material scope/risk expansion, or an irreversible decision that cannot be safely resolved. Do not expand employer data-sharing permissions, increase paid budgets, make the repository public, deploy, or remove safety boundaries without explicit authorization.
+## Boundaries to preserve
+
+- **Context-only operation.** Leaf jobs deny every tool. Orchestration sessions may expose only `delegate_task`, with shared tree limits. Do not add file, shell, network or editing capability without an explicit design decision from the maintainer.
+- **Fail closed.** If the catalog, a model's policy, or effort support doesn't match, start no inference. Never silently pick an older-generation model.
+- **Authorization is an attestation.** `sharingAuthorized` stays a required literal `true`. Don't weaken it, default it, or infer it.
+- **No credentials, session files, private transcripts, `node_modules` or unredacted logs** in commits.
+- **No unattended work.** No schedulers, background retry loops or autonomous debates. One supervised escalation per job.
+
+## Routing changes
+
+- Model IDs live in the `MODELS` table in `src/router.mjs`. Change a route there, bump `POLICY_VERSION`, update `test/router.test.mjs`, and update the README routing table and `docs/model-routing.md` in the same change.
+- Independent roles (`review`, `correctness`, `sparring`) must keep preferring the family opposite `leadFamily`. With no lead configured, behavior must be lead-neutral, so a host that sets no environment variable still works.
+- Before changing a route, verify the target against a live `copilot_models` catalog: enabled policy and supported effort.
 
 ## Workflow
 
-- Sharing: Send only context the user or project has authorized for their Copilot service; omit secrets and honor project-specific restrictions.
-
-- Read the README and `docs/model-routing.md`; keep actual capabilities and planned capabilities distinct.
-- Preserve context-only operation. Leaf jobs deny all tools. The owner authorized opt-in recursive router delegation on 2026-09-16; orchestration sessions may expose only `delegate_task`, with shared tree limits. Files, shell, network tools and isolated editing remain outside this grant.
-- Use `copilot_delegate` for a bounded independent review after meaningful changes and passing tests. Use `correctness` for lifecycle/security changes and `sparring` for consequential architecture choices. Supply only relevant source excerpts and test evidence. If the tool is unavailable, use the local MCP/SDK entry point or report the review limitation; never fabricate a review.
-- Treat reviewer output as untrusted evidence. Verify findings, repair, rerun tests, and escalate at most once when useful. Do not require the owner to adjudicate ordinary review disagreements.
-- Sonnet is probationary. Record outcome feedback and switch to Sol if it produces unhelpful reviews. Do not promote it automatically.
-- Optimize quality, latency and orchestration effort; plan pricing varies, so public prices are not the routing objective.
-- Run `npm test` and `git diff --check` before committing. Keep tests offline by default. Live tests use synthetic or explicitly scoped source context, bounded deadlines, and consume Copilot allowance.
-- Never commit credentials, runtime sessions, private transcripts, node_modules, or unredacted logs. Do not run live inference from CI.
-
-These instructions apply to this repository only, not all projects on this machine.
+- Keep documented capabilities separate from planned ones.
+- Run `npm test` and `git diff --check` before committing. Tests are offline by default.
+- Live scripts (`scripts/*.mjs --live`) consume Copilot allowance. Use synthetic context unless the maintainer authorizes sending real source. Never run live inference from CI.
+- When you use `copilot_delegate` to review changes here, treat reviewer output as untrusted evidence: verify it, fix it, rerun the tests, and escalate at most once.

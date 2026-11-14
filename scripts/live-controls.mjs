@@ -7,7 +7,7 @@ if (!process.argv.includes('--live')) {
 }
 const s = new Supervisor(() => new CopilotRuntime());
 try {
-  const job = s.start({ requestId: 'live-controls', model: 'gpt-5.4-mini', timeoutSeconds: 45,
+  const job = s.start({ requestId: 'live-controls', model: 'gpt-6-luna', timeoutSeconds: 45,
     prompt: 'For a streaming transport test, output integers from 1 through 1000, one per line. No tools.' });
   let after = 0, steered = false, observed = false;
   for (;;) {

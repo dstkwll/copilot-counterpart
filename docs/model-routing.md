@@ -1,102 +1,50 @@
 # Model routing
 
-Status: automatic model/effort selection implemented for context-only delegation, with opt-in recursive orchestration. Triggered by an active orchestrator, not a background scheduler. Updated 2026-09-23.
+Policy version 3. The router is in [`src/router.mjs`](../src/router.mjs).
 
-## Objective
+## Principles
 
-Keep Astra in Codex as the thinking partner, orchestrator, and final decision-maker. Use the work-funded Copilot subscription for bounded reviews, counterarguments, and eventually implementation. Optimize accepted work and reduced orchestration/repair effort, not simply price per generated token.
+1. **The primary assistant stays in charge.** Codex, Claude or another host does the synthesis, adjudication and final decisions. Copilot models provide bounded second opinions and proposals.
+2. **Independence comes from a different model family.** A reviewer from the lead's own family tends to share its blind spots. `review`, `correctness` and `sparring` therefore prefer the family opposite `leadFamily`. Provider diversity is a heuristic, not proof of independence; tests and evidence still decide.
+3. **Workers aren't reviewers.** `analysis` and `code_proposal` produce work for the lead to verify. They route on capability and cost, whoever leads.
+4. **Fail closed, report fallbacks.** Every route is an ordered candidate list. The first enabled model that supports the required effort wins. `fallback` and `crossFamily` make degradation visible. No candidate means no inference.
+5. **No price-based routing.** Plan pricing, discounts and allowances differ by account, so routes optimize quality, latency and the lead's repair effort.
 
-Send only context the user or project has authorized for their Copilot service; omit secrets and honor project-specific restrictions.
+## Lead family
 
-## Starting roles
+`leadFamily` is `openai` (e.g. Codex) or `anthropic` (e.g. Claude). It's resolved per call in this order:
 
-| Role | Proposed model / effort | Escalation |
-| --- | --- | --- |
-| Intent, architecture synthesis, adjudication | Astra in Codex | Keep the user-facing relationship unchanged |
-| Small deterministic work, fixtures, repetitive tests | GPT-6 Luna medium | GPT-6 Sol when behavior or context is ambiguous |
-| Ordinary bounded implementation | GPT-6 Sol medium | GPT-6 Sol high for cross-cutting work or difficult debugging |
-| Routine review trial | Sonnet 5 high | Sol high for correctness; Opus 5.5 for consequential design concerns |
-| Correctness review and difficult invariants | GPT-6 Sol high | Astra verifies unresolved findings against evidence |
-| Architecture sparring and alternative designs | Opus 5.5 high | One focused follow-up, then Astra adjudicates |
-| Experimental inexpensive worker | MAI-Code-1.1-Flash | Compare against Luna before any promotion |
+1. The `leadFamily` argument on `copilot_delegate` or `copilot_orchestrate`.
+2. The server's `COPILOT_SUPERVISOR_LEAD_FAMILY` environment variable, set at registration. Unknown values are ignored with a warning on stderr.
+3. Otherwise unset. The router then uses its lead-neutral table.
 
-These are starting hypotheses, not measured model rankings. GitHub's [model comparison](https://docs.github.com/en/copilot/reference/ai-models/model-comparison) supports the broad task categories, not superiority on this user's projects.
+Children inside a `copilot_orchestrate` tree inherit the outer call's lead family. The family is set by registration rather than by the explicitly chosen tree lead, because the outer assistant is the one that adjudicates the results.
 
-### Sonnet is explicitly probationary
+## Routes
 
-The user has had poor experiences with Sonnet but is willing to try it initially. Do not treat its output as trusted or make it a required quality gate. Start with a few bounded, low-risk reviews; record useful findings, false positives, missed defects, and Astra's verification effort. Stop using it as a routine reviewer if its output creates more work than it saves. Use Sol or Opus when stronger evidence or a different perspective is needed. Do not claim the trial has happened yet.
+| Role | anthropic lead | openai lead | unset |
+| --- | --- | --- | --- |
+| review | Sol → Sol (prev) | Opus → Sol → Sol (prev) | Sol → Sol (prev) |
+| correctness | Sol → Sol (prev) → Astra | Opus → Sol → Sol (prev) | Sol → Sol (prev) → Opus |
+| sparring / high-risk review | Astra → Sol → Sol (prev) | Opus → Sol → Sol (prev) | Opus → Sol → Sol (prev) |
+| analysis / code_proposal, complex or high risk | Sol → Sol (prev) | same | same |
+| analysis / code_proposal, normal (medium effort) | Sol → Sol (prev) | same | same |
+| analysis / code_proposal, small (medium effort) | Luna → Sol → Sol (prev) | same | same |
 
-## Orchestrator triggers
+In this table Sol is `gpt-6.1-sol`, Sol (prev) is `gpt-6-sol`, Luna is `gpt-6-luna`, Astra is `gpt-6-astra` and Opus is `claude-opus-5.5`. Effort is high unless the table says otherwise.
 
-1. Before a consequential design decision, request one focused Opus challenge: strongest alternative, questionable assumptions, and evidence that would change the recommendation.
-2. Delegate implementation only once requirements, allowed files, acceptance tests, and stop conditions are clear. Match the starting tier to complexity rather than always starting at the cheapest tier.
-3. After a meaningful change passes its checks, request one independent review. Prefer a different provider when useful, without treating provider diversity as proof of independence.
-4. After a failed repair or demonstrated misunderstanding, inspect the task brief and missing context, then escalate once. Do not loop through repeated speculative fixes.
-5. Skip delegation for trivial changes where briefing and checking cost more than doing the task.
+**Escalation** (`parentJobId`, once per job): Luna escalates to Sol, then to the ceiling. Sol escalates straight to the ceiling. The ceiling is Astra for an anthropic lead and Opus 5.5 otherwise. A job that already ran on Astra or Opus 5.5 can't be escalated; the lead adjudicates.
 
-Give reviewers the requirements, diff, relevant context and test evidence, without a persuasive defense of the implementation. Require concrete findings, consequences and verification steps. Tests and evidence decide; model agreement is not a vote to approve.
+## Changes from policy v2
 
-Keep long polls bounded, review emitted progress at useful checkpoints, and cancel drift. No automatic deployments, pushes, destructive actions, privilege expansion, or unbounded reviewer debates.
+- Added lead-family routing (`leadFamily` argument and `COPILOT_SUPERVISOR_LEAD_FAMILY`), plus `leadFamily` and `crossFamily` fields on the route.
+- Sol tier moved to `gpt-6.1-sol`, with `gpt-6-sol` as a fallback.
+- Removed the probationary Sonnet review trial and its process-local trial counters. Review now goes to the opposite family.
+- Claude-led sparring uses GPT-6 Astra high. The escalation ceiling depends on the lead.
 
-## Current routing (policy version 2)
+## Known limits and next steps
 
-Verified against the authenticated Copilot catalog on 2026-09-23: `gpt-6-sol`, `gpt-6-luna`, and `claude-opus-5.5` are enabled and support the retained medium/high efforts. Sol replaces both the previous Sol correctness tier and Terra ordinary-work tier; Luna retains small work. Sonnet 5 remains the capped routine-review trial at high effort, with Sol high after the trial or when Sonnet is unavailable. Small work falls back from Luna to Sol; correctness from Sol to Opus 5.5; sparring from Opus 5.5 to Sol. Ordinary work requires Sol. No older-generation model is silently selected. One escalation and all permission/tree limits are unchanged. Explicit lead model selection remains separate from child routing.
-
-The installed Codex `copilot-delegation` skill describes this router; Codex MCP registration points to the separately installed supervisor runtime. Native Codex model selection is separate and its main default remains Astra. Restarted/new MCP server processes load the updated routing; already-running processes retain their loaded policy.
-
-## Historical availability snapshot
-
-The authenticated SDK catalog on 2026-09-09 advertised:
-
-- OpenAI: GPT-6 Astra; GPT-5.6 Sol, Terra and Luna; GPT-5.5; GPT-5.4 and 5.4 mini; GPT-5.3-Codex; GPT-5 mini.
-- Anthropic: Claude Opus 5, 4.8, 4.7 and 4.6; Claude Sonnet 5; Claude Haiku 4.5.
-- Other providers: MAI-Code-1.1-Flash, MAI-Code-1-Flash, Grok 4.5 and 4.6.
-- Auto was available, but explicit routing is preferable when evaluating a model's contribution. An internal-only variant is deliberately excluded from the routing proposal.
-
-Gemini 3.8 Flash was absent from this SDK catalog, despite appearing in GitHub's public model list. Do not assume it is selectable, or guess why it is absent. Refresh the catalog before dispatch and validate reasoning effort against the selected model's capabilities. Catalog visibility is not a successful inference test of every model.
-
-## Pricing and budget uncertainty
-
-Plan pricing and allowances vary by account. Do not optimize Sol routing around public prices or equate those prices with what an account is charged. Prioritize quality, latency, and reduced supervision/repair work; retain bounded usage and policy controls.
-
-Rechecked GitHub's [published Copilot pricing](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing) on 2026-09-09:
-
-| Model | Standard-context input / output USD per million tokens |
-| --- | --- |
-| Luna | 0.20 / 1.20 |
-| MAI-Code-1.1-Flash | 0.20 / 1.20 |
-| Sonnet 5 | 2.00 / 10.00 |
-| Terra | 2.00 / 12.00 |
-| Sol | 4.00 / 20.00 |
-| Opus 5 | 5.00 / 25.00 |
-
-Cache read/write rates and long-context rates are separate. Sol's published cached-input rate is 0.40 per million tokens. Business/Enterprise AI-credit allowances are pooled; legacy annual individual plans differ. No claim is made about which arrangement applies here. SDK usage fields must have their units validated before being presented as dollar spend.
-
-## Current implementation versus next increments
-
-Implemented: authenticated SDK access, role/model selection with availability fallback, validated reasoning-effort propagation, structured task briefs, context-only reviews/proposals, streaming events, steering, cancellation, deny-all tool policy, timeouts, bounded concurrency/history, one supervised escalation and process-local feedback. Token usage is aggregated without assuming internal billing rates.
-
-Sonnet trial is capped at three dispatches per process. One unhelpful review disables it for that process; helpful feedback does not promote it. These counters reset on server restart; durable evaluation remains planned. Code proposals do not edit or execute files.
-
-Not implemented:
-
-1. Durable project eligibility policy and explicit allowance/budget settings. Current authorization is a required orchestrator attestation, not an independent policy lookup.
-2. Machine-validated findings (currently requested sections in the prompt, not guaranteed output schema).
-3. Durable outcome and usage tracking, with no stored secrets or raw private transcripts.
-4. Scoped repository snapshots, then isolated editing worktrees and approval checkpoints.
-5. Measured routing adjustments based on accepted patches, useful findings, false positives, repair effort, latency and consumption.
-
-Start with reviews, sparring and code proposals. Actual implementation remains proposed until file isolation and verification are ready. Automatic routing does not grant additional tool permissions. A real MCP Sol-high synthetic test has succeeded.
-
-
-## Recursive handoffs (2026-09-16)
-
-An explicitly selected Copilot lead such as Astra can now initiate handoffs via `copilot_orchestrate`. Explicit model choice applies to the lead only. All children route by role/complexity/risk; selected children may delegate again within the original tree limits. Ordinary leaf calls and one finished-job escalation retain their behavior. The same process-local Sonnet trial state is shared across root and child routing.
-
-The outer assistant still supervises outcomes and authorization. The Copilot lead chooses decomposition and synthesis. Delegation is a separate capability from model selection and grants no editing, shell or repository access. See [implementation and evidence](recursive-delegation.md). Savings remain unmeasured; compare quality, actual usage, latency and repair effort before claiming improvement.
-
-## Migration validation (2026-09-23)
-
-All 41 offline tests passed in source and installed runtime, including tier selection, unavailable-model fallbacks, legacy-only catalog rejection, escalation ceilings, and recursive child routing. A fresh installed stdio MCP server completed three synthetic routed calls: GPT-6 Luna/medium, GPT-6 Sol/high, and Claude Opus 5.5/high. Each returned 42 for 17+25; usage events confirmed the effective model. This is an availability/routing smoke check, not a comparative quality evaluation. Recursive routing was tested offline; the updated nested live probe was not rerun.
-
-An independent Copilot GPT-5.6 Sol/high review completed. Its two concerns were checked against source: high-effort review fallback is intentionally retained, and legacy parent jobs cannot cross the process-local supervisor job map into a freshly loaded policy. No code changes were warranted. Existing MCP processes were preserved; new connections load policy v2.
+- Feedback is recorded per process and doesn't change routing. A future step is durable outcome tracking (useful findings, false positives, repair effort, latency) to tune routes with evidence.
+- Findings come back as requested prose sections, not a validated schema.
+- Not implemented yet: scoped repository snapshots, isolated editing worktrees and approval checkpoints.
+- Model availability changes over time. Re-check `copilot_models` before changing the table.
