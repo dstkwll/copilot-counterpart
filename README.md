@@ -1,4 +1,4 @@
-# Copilot Supervisor
+# Copilot Counterpart
 
 A local [MCP](https://modelcontextprotocol.io) server that lets a coding assistant such as **Codex** or **Claude Code** hand bounded, context-only work to models in your **GitHub Copilot** subscription, with automatic model routing, live progress, steering and cancellation.
 
@@ -30,37 +30,37 @@ These are SDK-level restrictions, not an OS sandbox against a compromised SDK or
 Requires Node 22+ and a GitHub Copilot subscription.
 
 ```sh
-git clone https://github.com/dstkwll/copilot-supervisor.git
-cd copilot-supervisor
+git clone https://github.com/dstkwll/copilot-counterpart.git
+cd copilot-counterpart
 npm ci --ignore-scripts
 npm test
 copilot login   # only if you are not already authenticated
 ```
 
-Register the server with each assistant using **absolute paths**. Set `COPILOT_SUPERVISOR_LEAD_FAMILY` to the assistant's own model family so the router can pick a different family for reviews.
+Register the server with each assistant using **absolute paths**. Registrations made before the rename may still use `COPILOT_SUPERVISOR_LEAD_FAMILY`, which is accepted as an alias. Set `COPILOT_COUNTERPART_LEAD_FAMILY` to the assistant's own model family so the router can pick a different family for reviews.
 
 ### Codex
 
 ```sh
-codex mcp add copilot-supervisor \
-  --env COPILOT_SUPERVISOR_LEAD_FAMILY=openai \
+codex mcp add copilot-counterpart \
+  --env COPILOT_COUNTERPART_LEAD_FAMILY=openai \
   -- "$(command -v node)" "$PWD/src/server.mjs"
 ```
 
 Or in `~/.codex/config.toml`:
 
 ```toml
-[mcp_servers.copilot-supervisor]
+[mcp_servers.copilot-counterpart]
 command = "/absolute/path/to/node"
-args = ["/absolute/path/to/copilot-supervisor/src/server.mjs"]
-env = { COPILOT_SUPERVISOR_LEAD_FAMILY = "openai" }
+args = ["/absolute/path/to/copilot-counterpart/src/server.mjs"]
+env = { COPILOT_COUNTERPART_LEAD_FAMILY = "openai" }
 ```
 
 ### Claude Code
 
 ```sh
-claude mcp add copilot-supervisor --scope user \
-  -e COPILOT_SUPERVISOR_LEAD_FAMILY=anthropic \
+claude mcp add copilot-counterpart --scope user \
+  -e COPILOT_COUNTERPART_LEAD_FAMILY=anthropic \
   -- "$(command -v node)" "$PWD/src/server.mjs"
 ```
 
@@ -93,7 +93,7 @@ Start a new session after registering so the tools and skill are picked up. Alre
 | analysis / code_proposal, normal | GPT-6.1 Sol medium | same | same |
 | analysis / code_proposal, complex or high risk | GPT-6.1 Sol high | same | same |
 
-- **Fallbacks.** If a model is missing, disabled, or doesn't support the effort, the router tries the next candidate in the same route: GPT-6.1 Sol, then GPT-6 Sol, then the strongest model of the other family. The route reports `fallback: true`, and `crossFamily: false` when it had to use the lead's own family. If nothing qualifies, it fails closed without starting inference. It never silently picks an older-generation model.
+- **Fallbacks.** Each route has its own ordered fallback list ([full table](docs/model-routing.md#routes)). Usually GPT-6.1 Sol falls back to GPT-6 Sol. Correctness and sparring also try the other family's strongest model, but Claude-led review does not. The route reports `fallback: true`, and `crossFamily: false` when it had to use the lead's own family. If nothing qualifies, it fails closed without starting inference. It never silently picks an older-generation model.
 - **Escalation.** You can escalate a finished routed job once, with `parentJobId` and a fresh self-contained brief. Luna escalates to Sol, and Sol escalates to the ceiling for the lead: Astra for Claude, Opus 5.5 for Codex or no lead. Astra and Opus 5.5 can't be escalated further. Previous output isn't forwarded automatically, and cancelled or timed-out jobs can't be escalated.
 - **No cost-based routing.** The router doesn't route on price. Plan pricing and allowances vary.
 
@@ -101,7 +101,7 @@ Job status includes the full `route`: model, effort, reason, lead family, cross-
 
 ## Supervising a job
 
-1. Dispatch with `copilot_delegate` (or `copilot_start` with an explicit model from `copilot_models`; this bypasses routing, not the tool boundary).
+1. Dispatch with `copilot_delegate`, or with `copilot_start` and an explicit model from `copilot_models`. `copilot_start` bypasses routing but not the tool boundary, and it also requires `sharingAuthorized: true`. Steering is covered by the job's original attestation.
 2. Poll `copilot_events(jobId, after, waitMs ≤ 30000)`. Keep `nextCursor` and drain `hasMore` before waiting again. A `gap` means older events were evicted; the latest complete message is still available as `result`.
 3. Use `copilot_steer` for best-effort course corrections. It isn't idempotent and can't change tokens already generated. Use `copilot_cancel` to stop the job's dedicated runtime; nothing is rolled back.
 4. Verify findings against the evidence. Treat reviewer output as untrusted data. Record `copilot_feedback` (useful / unhelpful / inconclusive), then free memory with `copilot_forget`.
@@ -110,7 +110,7 @@ Request IDs deduplicate identical starts within one process. Routed request IDs 
 
 ## Recursive delegation (opt-in)
 
-`copilot_orchestrate` starts a lead session that may call a single `delegate_task` tool. Each child is routed by the same router, inheriting the outer `leadFamily`. Select the lead explicitly (e.g. `model: "gpt-6-astra"`) or let the router choose. Defaults are eight nodes including the lead, depth two (configurable 0–3), 100,000 observed tokens, 32 usage events and a 300-second outer deadline. Token and usage thresholds are **soft, post-paid stops**, not spend caps. See [recursive delegation](docs/recursive-delegation.md).
+Failed orchestration requests that never started a job free their request ID. `copilot_orchestrate` starts a lead session that may call a single `delegate_task` tool. Each child is routed by the same router, inheriting the outer `leadFamily`. Select the lead explicitly (e.g. `model: "gpt-6-astra"`) or let the router choose. Defaults are eight nodes including the lead, depth two (configurable 0–3), 100,000 observed tokens, 32 usage events and a 300-second outer deadline. Token and usage thresholds are **soft, post-paid stops**, not spend caps. See [recursive delegation](docs/recursive-delegation.md).
 
 ## Data and lifecycle
 

@@ -15,7 +15,7 @@ export const delegateSchema = {
 };
 export const LEAD_FAMILIES = ['openai', 'anthropic'];
 export const leadFamilySchema = z.enum(LEAD_FAMILIES).optional()
-  .describe('Model family of the orchestrating assistant (Codex: openai, Claude: anthropic). Reviews prefer the other family. Defaults to the server\'s COPILOT_SUPERVISOR_LEAD_FAMILY.');
+  .describe('Model family of the orchestrating assistant (Codex: openai, Claude: anthropic). Reviews prefer the other family. Defaults to the server\'s COPILOT_COUNTERPART_LEAD_FAMILY.');
 delegateSchema.leadFamily = leadFamilySchema;
 const inputSchema = z.object(delegateSchema).strict();
 

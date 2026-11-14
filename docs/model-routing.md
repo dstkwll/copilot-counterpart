@@ -15,7 +15,7 @@ Policy version 3. The router is in [`src/router.mjs`](../src/router.mjs).
 `leadFamily` is `openai` (e.g. Codex) or `anthropic` (e.g. Claude). It's resolved per call in this order:
 
 1. The `leadFamily` argument on `copilot_delegate` or `copilot_orchestrate`.
-2. The server's `COPILOT_SUPERVISOR_LEAD_FAMILY` environment variable, set at registration. Unknown values are ignored with a warning on stderr.
+2. The server's `COPILOT_COUNTERPART_LEAD_FAMILY` environment variable, set at registration. Unknown values are ignored with a warning on stderr.
 3. Otherwise unset. The router then uses its lead-neutral table.
 
 Children inside a `copilot_orchestrate` tree inherit the outer call's lead family. The family is set by registration rather than by the explicitly chosen tree lead, because the outer assistant is the one that adjudicates the results.
@@ -37,7 +37,7 @@ In this table Sol is `gpt-6.1-sol`, Sol (prev) is `gpt-6-sol`, Luna is `gpt-6-lu
 
 ## Changes from policy v2
 
-- Added lead-family routing (`leadFamily` argument and `COPILOT_SUPERVISOR_LEAD_FAMILY`), plus `leadFamily` and `crossFamily` fields on the route.
+- Added lead-family routing (`leadFamily` argument and `COPILOT_COUNTERPART_LEAD_FAMILY`), plus `leadFamily` and `crossFamily` fields on the route.
 - Sol tier moved to `gpt-6.1-sol`, with `gpt-6-sol` as a fallback.
 - Removed the probationary Sonnet review trial and its process-local trial counters. Review now goes to the opposite family.
 - Claude-led sparring uses GPT-6 Astra high. The escalation ceiling depends on the lead.

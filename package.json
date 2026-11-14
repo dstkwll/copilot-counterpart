@@ -1,6 +1,6 @@
 {
-  "name": "copilot-supervisor",
-  "version": "0.2.0",
+  "name": "copilot-counterpart",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -19,6 +19,6 @@
   "description": "Local MCP server for supervised, context-only GitHub Copilot delegation with cross-family model routing.",
   "repository": {
     "type": "git",
-    "url": "https://github.com/dstkwll/copilot-supervisor.git"
+    "url": "https://github.com/dstkwll/copilot-counterpart.git"
   }
 }

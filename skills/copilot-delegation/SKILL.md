@@ -1,6 +1,6 @@
 ---
 name: copilot-delegation
-description: Use the authenticated Copilot supervisor for bounded independent reviews after meaningful changes, consequential design sparring, or well-specified analysis and code proposals. Skip trivial work and respect requests not to delegate.
+description: Use the Copilot Counterpart server for bounded independent reviews after meaningful changes, consequential design sparring, or well-specified analysis and code proposals. Skip trivial work and respect requests not to delegate.
 ---
 
 # Supervised Copilot delegation
@@ -26,7 +26,7 @@ Supply a fresh `requestId`, `task`, relevant `context`, explicit `acceptanceCrit
 
 Set complexity and risk honestly. The router validates the live catalog and selects the actual model and effort; do not hardcode availability or route on public pricing.
 
-**Lead family.** The router sends `review`, `correctness` and `sparring` to a model family different from yours, so the second opinion is independent. The server normally knows your family from its registration (`COPILOT_SUPERVISOR_LEAD_FAMILY`). If the route reports no `leadFamily`, or a wrong one, pass `leadFamily` explicitly: `openai` for GPT-based assistants such as Codex, `anthropic` for Claude. A route with `crossFamily: false` fell back to your own family; mention that when reporting the result.
+**Lead family.** The router sends `review`, `correctness` and `sparring` to a model family different from yours, so the second opinion is independent. The server normally knows your family from its registration (`COPILOT_COUNTERPART_LEAD_FAMILY`). If the route reports no `leadFamily`, or a wrong one, pass `leadFamily` explicitly: `openai` for GPT-based assistants such as Codex, `anthropic` for Claude. A route with `crossFamily: false` fell back to your own family; mention that when reporting the result.
 
 Poll `copilot_events` using `nextCursor` as `after`, draining `hasMore` before waiting again (at most 30 seconds per poll). A gap means lost event history; use the current result and do not claim a complete transcript. Check emitted progress at useful intervals. Steer drift with `copilot_steer` or cancel with `copilot_cancel`; steering is best effort and cannot rewrite emitted tokens. Observe a terminal status before claiming completion. No hidden reasoning visibility or uninterrupted real-time monitoring is promised.
 

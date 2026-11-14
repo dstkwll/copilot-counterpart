@@ -17,7 +17,10 @@ test('MCP tools negotiate, validate and dispatch without GitHub requests', async
     assert.match(models.content[0].text, /test-model/);
     const invalid = await client.callTool({ name: 'copilot_start', arguments: { prompt: 'x' } });
     assert.equal(invalid.isError, true);
-    const started = await client.callTool({ name: 'copilot_start', arguments: { requestId: 'mcp-1', model: 'test-model', prompt: 'sample' } });
+    const unattested = await client.callTool({ name: 'copilot_start', arguments: { requestId: 'mcp-0', model: 'test-model', prompt: 'sample' } });
+    assert.equal(unattested.isError, true);
+    assert.match(unattested.content[0].text, /sharingAuthorized/);
+    const started = await client.callTool({ name: 'copilot_start', arguments: { requestId: 'mcp-1', model: 'test-model', prompt: 'sample', sharingAuthorized: true } });
     const { jobId } = JSON.parse(started.content[0].text);
     const cancelled = await client.callTool({ name: 'copilot_cancel', arguments: { jobId } });
     assert.equal(JSON.parse(cancelled.content[0].text).status, 'cancelled');
@@ -45,12 +48,39 @@ test('orchestration requires sharing, validates model, deduplicates and exposes 
  } finally {await supervisor.close();await client.close();await server.close();}
 });
 
-test('COPILOT_SUPERVISOR_LEAD_FAMILY is normalized; unknown values are ignored', () => {
+test('COPILOT_COUNTERPART_LEAD_FAMILY is normalized; unknown values are ignored', () => {
   assert.equal(resolveLeadFamily(undefined), undefined);
   assert.equal(resolveLeadFamily(' Anthropic '), 'anthropic');
   assert.equal(resolveLeadFamily('openai'), 'openai');
+  const saved = { ...process.env };
+  try {
+    delete process.env.COPILOT_COUNTERPART_LEAD_FAMILY; process.env.COPILOT_SUPERVISOR_LEAD_FAMILY = 'anthropic';
+    assert.equal(resolveLeadFamily(), 'anthropic');
+    process.env.COPILOT_COUNTERPART_LEAD_FAMILY = 'openai';
+    assert.equal(resolveLeadFamily(), 'openai');
+  } finally { process.env = saved; }
   const write = process.stderr.write; let warned = '';
   process.stderr.write = chunk => { warned += chunk; return true; };
   try { assert.equal(resolveLeadFamily('gemini'), undefined); } finally { process.stderr.write = write; }
   assert.match(warned, /ignoring unknown/);
+});
+
+test('failed orchestration before admission frees its request ID for retry', async () => {
+  let fail = true, lookups = 0;
+  const supervisor = new Supervisor(() => ({ open: async () => ({ send: async () => {} }), close: async () => {} }));
+  const { server } = createServer(supervisor, async () => { lookups++; if (fail) throw Error('catalog down'); return [{ id: 'gpt-6-astra', supportedReasoningEfforts: ['high'] }]; });
+  const client = new Client({ name: 'test', version: '1.0.0' });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(a), client.connect(b)]);
+  const args = { requestId: 'o1', prompt: 'p', sharingAuthorized: true, model: 'gpt-6-astra', reasoningEffort: 'high' };
+  try {
+    for (let i = 0; i < 70; i++) {
+      const r = await client.callTool({ name: 'copilot_orchestrate', arguments: { ...args, requestId: `f${i}` } });
+      assert.match(r.content[0].text, /catalog down/);
+    }
+    fail = false;
+    const ok = await client.callTool({ name: 'copilot_orchestrate', arguments: args });
+    assert.equal(ok.isError, undefined);
+    assert.equal(lookups, 71);
+  } finally { await supervisor.close(); await client.close(); await server.close(); }
 });

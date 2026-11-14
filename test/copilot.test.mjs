@@ -31,6 +31,7 @@ test('adapter disables discovery, tools and permissions, verifies runtime tool s
 
 test('adapter fails closed if runtime exposes a tool', async () => {
   const runtime = new CopilotRuntime(() => ({ start: async () => {}, forceStop: async () => {},
+    listModels: async () => [{ id: 'test' }],
     createSession: async () => ({ rpc: { tools: {
       initializeAndValidate: async () => {}, getCurrentMetadata: async () => ({ tools: [{ name: 'bash' }] })
     } } }) }));
@@ -81,4 +82,17 @@ test('failed initial stop still joins startup and attempts final stop',async()=>
  const opening=runtime.open('test',()=>{});opening.catch(()=>{});await ready;
  const closing=runtime.close();release();await assert.rejects(closing,/first stop failed/);
  assert.equal(stops,2);assert.equal(cleanups,1);
+});
+
+test('adapter validates model existence and policy even without a reasoning effort', async () => {
+  let created = false;
+  const fake = catalog => () => ({ start: async () => {}, forceStop: async () => {}, listModels: async () => catalog,
+    createSession: async () => { created = true; throw Error('should not create'); } });
+  for (const [catalog, pattern] of [[[], /unavailable/], [[{ id: 'test', policy: { state: 'disabled' } }], /disabled/]]) {
+    const runtime = new CopilotRuntime(fake(catalog));
+    try { await assert.rejects(runtime.open('test', () => {}), pattern); } finally { await runtime.close(); }
+  }
+  const runtime = new CopilotRuntime(fake([{ id: 'test', supportedReasoningEfforts: ['low'] }]));
+  try { await assert.rejects(runtime.open('test', () => {}, { reasoningEffort: 'high' }), /effort unsupported/); } finally { await runtime.close(); }
+  assert.equal(created, false);
 });

@@ -16,17 +16,18 @@ export class CopilotRuntime {
   }
 
   async initialize(model, onEvent, { reasoningEffort } = {}) {
-    this.directory = await mkdtemp(join(tmpdir(), 'copilot-supervisor-'));
+    this.directory = await mkdtemp(join(tmpdir(), 'copilot-counterpart-'));
     if (this.closed) { await this.cleanup(); throw new Error('Cancelled during startup.'); }
     this.client = this.clientFactory({ mode: 'empty', baseDirectory: join(homedir(), '.copilot'),
       workingDirectory: this.directory, logLevel: 'error', useLoggedInUser: true });
     await this.client.start();
     if (this.closed) throw new Error('Cancelled during startup.');
-    if (reasoningEffort) {
-      const selected = (await this.client.listModels()).find(m => m.id === model);
-      if (!selected || (selected.policy && selected.policy.state !== 'enabled') || !selected.supportedReasoningEfforts?.includes(reasoningEffort))
-        throw new Error('Model unavailable or requested reasoning effort unsupported.');
-    }
+    // Always confirm the model exists and is enabled; check effort only when one was requested.
+    const selected = (await this.client.listModels()).find(m => m.id === model);
+    if (!selected || (selected.policy && selected.policy.state !== 'enabled'))
+      throw new Error('Model unavailable or disabled by policy.');
+    if (reasoningEffort && !selected.supportedReasoningEfforts?.includes(reasoningEffort))
+      throw new Error('Requested reasoning effort unsupported by the model.');
     this.session = await this.client.createSession({ model, reasoningEffort, streaming: true,
       workingDirectory: this.directory, enableConfigDiscovery: false,
       availableTools: this.delegationTool ? ['custom:delegate_task'] : [],

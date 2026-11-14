@@ -1,17 +1,17 @@
 {
-  "name": "copilot-supervisor",
-  "version": "0.2.0",
+  "name": "copilot-counterpart",
+  "version": "0.3.0",
   "description": "Supervised GitHub Copilot reviews with live events, steering and cancellation.",
   "author": {
-    "name": "copilot-supervisor contributors"
+    "name": "copilot-counterpart contributors"
   },
   "interface": {
-    "displayName": "Copilot Supervisor",
+    "displayName": "Copilot Counterpart",
     "shortDescription": "Supervised, routed GitHub Copilot delegation for Codex and other MCP hosts.",
     "longDescription": "Delegate context-only reviews, sparring and proposals through the official Copilot SDK with cross-family model routing; inspect progress, steer or cancel. All delegate tools are denied. Register the MCP server directly (see README).",
-    "developerName": "copilot-supervisor contributors",
+    "developerName": "copilot-counterpart contributors",
     "category": "Productivity",
     "capabilities": [],
-    "defaultPrompt": "Help me use Copilot Supervisor."
+    "defaultPrompt": "Help me use Copilot Counterpart."
   }
 }
