@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, symlink, rm, realpath, link, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { Workspace, isDenied } from '../src/workspace.mjs';
 
@@ -235,5 +236,54 @@ test('unexpected filesystem errors are reduced to their code', async () => {
     const out = await read.handler({ path: 'src/a.js' });
     assert.match(out, /File system error \(EACCES\)/);
     assert.doesNotMatch(out, /outside/);
+  } finally { await f.cleanup(); }
+});
+
+test('a FIFO in a granted directory is refused without hanging', async () => {
+  const f = await fixture();
+  try {
+    execFileSync('mkfifo', [join(f.root, 'src', 'pipe')]);
+    const ws = await Workspace.create({ root: f.root, read: ['src'] });
+    await assert.rejects(ws.read('src/pipe'), /Not a regular file/);
+    assert.equal((await ws.search('const')).matches.length, 2);
+  } finally { await f.cleanup(); }
+});
+
+test('a UTF-8 BOM is preserved through edit, diff and apply', async () => {
+  const f = await fixture();
+  try {
+    await writeFile(join(f.root, 'src', 'bom.txt'), '\uFEFFline one\nline two\n');
+    const ws = await Workspace.create({ root: f.root, write: ['src/bom.txt'] });
+    await ws.edit('src/bom.txt', 'two', '2');
+    ws.freeze();
+    const { files, changeSetHash } = await ws.changes();
+    assert.doesNotMatch(files[0].diff, /^-.*line one/m);
+    await ws.apply(changeSetHash);
+    assert.deepEqual([...(await readFile(join(f.root, 'src', 'bom.txt'))).subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+  } finally { await f.cleanup(); }
+});
+
+test('a parent directory replaced at the same path is detected', async () => {
+  const f = await fixture();
+  try {
+    const ws = await Workspace.create({ root: f.root, write: ['docs/new.md'] });
+    await rename(join(f.root, 'docs'), join(f.root, 'docs-old'));
+    await mkdir(join(f.root, 'docs'));
+    await assert.rejects(ws.write('docs/new.md', 'x'), /Parent directory changed/);
+  } finally { await f.cleanup(); }
+});
+
+test('a partial commit is recorded and blocks retry', async () => {
+  const f = await fixture();
+  try {
+    const ws = await Workspace.create({ root: f.root, write: ['src/a.js', 'src/b.js'] });
+    await ws.edit('src/a.js', '1', '3'); await ws.edit('src/b.js', '2', '4'); ws.freeze();
+    const { changeSetHash } = await ws.changes();
+    const disk = ws.diskState.bind(ws); let calls = 0;
+    // Pass both preflight checks and the first commit check, then fail the second commit.
+    ws.diskState = async t => { if (++calls === 4) throw Error('injected'); return disk(t); };
+    await assert.rejects(ws.apply(changeSetHash), /Apply stopped at src\/b\.js[\s\S]*Written: src\/a\.js/);
+    assert.equal(ws.summary().applyState, 'partial');
+    await assert.rejects(ws.apply(changeSetHash), /already in progress or done/);
   } finally { await f.cleanup(); }
 });

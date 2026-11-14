@@ -39,7 +39,7 @@ const stateHash = state => state.present
   ? createHash('sha256').update('file\0').update(state.bytes).digest('hex')
   : createHash('sha256').update('absent\0').digest('hex');
 const textHash = text => createHash('sha256').update('file\0').update(Buffer.from(text, 'utf8')).digest('hex');
-const decoder = new TextDecoder('utf-8', { fatal: true });
+const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }); // keep a BOM visible in diffs
 function decodeText(bytes, label) {
   if (bytes.includes(0)) throw Error(`Binary file refused: ${label}`);
   try { return decoder.decode(bytes); } catch { throw Error(`Not UTF-8 text: ${label}`); }
@@ -67,7 +67,9 @@ export class Workspace {
       ws.check(target, entry);
       const info = await lstat(target).catch(e => { if (e.code === 'ENOENT') return undefined; throw e; });
       if (info && !info.isFile()) throw Error(`Granted write path is not a regular file: ${entry}`);
+      const parentInfo = await stat(parent);
       ws.writeTargets.set(target, parent);
+      ws.parentIds.set(target, `${parentInfo.dev}:${parentInfo.ino}`);
     }
     return ws;
   }
@@ -75,6 +77,7 @@ export class Workspace {
   constructor(spec, root) {
     this.spec = spec; this.root = root;
     this.readRoots = []; this.writeTargets = new Map(); // target -> real parent at grant time
+    this.parentIds = new Map(); // target -> parent device:inode at grant time
     this.staged = new Map(); // target -> { original: {present, text}, originalHash, content }
     this.readBytes = 0; this.searchBytes = 0;
     this.frozen = false; this.applyState = 'none'; this.applying = undefined;
@@ -98,14 +101,24 @@ export class Workspace {
   // then confirms the opened object is still what the path names.
   async readVerified(real, label) {
     let handle;
-    try { handle = await open(real, constants.O_RDONLY | constants.O_NOFOLLOW); }
+    // O_NONBLOCK so a FIFO cannot hang the open before its type is checked.
+    try { handle = await open(real, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
     catch (e) { if (e.code === 'ELOOP') throw new Refusal(`Symlink refused: ${label}`); throw e; }
     try {
       const info = await handle.stat();
       if (!info.isFile()) throw new Refusal(`Not a regular file: ${label}`);
       if (info.nlink > 1) throw new Refusal(`Hard-linked file refused: ${label}`);
       if (info.size > LIMITS.fileBytes) throw new Refusal(`File too large: ${label}`);
-      const bytes = await handle.readFile();
+      // Read at most size+1 bytes, so a file growing after fstat is detected, not slurped.
+      const buffer = Buffer.alloc(info.size + 1);
+      let length = 0;
+      for (;;) {
+        const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+        if (!bytesRead) break;
+        length += bytesRead;
+        if (length > info.size) throw new Refusal(`File changed during read: ${label}`);
+      }
+      const bytes = buffer.subarray(0, length);
       const again = await realpath(real);
       const now = await stat(again);
       if (again !== real || now.ino !== info.ino || now.dev !== info.dev) throw new Refusal(`File changed during read: ${label}`);
@@ -123,7 +136,10 @@ export class Workspace {
 
   async diskState(target) {
     const label = this.rel(target);
-    if (await realpath(dirname(target)) !== this.writeTargets.get(target)) throw new Refusal(`Parent directory changed: ${label}`);
+    const parent = this.writeTargets.get(target);
+    const parentInfo = await stat(parent).catch(() => undefined);
+    if (await realpath(dirname(target)).catch(() => undefined) !== parent || !parentInfo || `${parentInfo.dev}:${parentInfo.ino}` !== this.parentIds.get(target))
+      throw new Refusal(`Parent directory changed: ${label}`);
     const info = await lstat(target).catch(e => { if (e.code === 'ENOENT') return undefined; throw e; });
     if (!info) return { present: false };
     const bytes = await this.readVerified(target, label);
@@ -204,19 +220,24 @@ export class Workspace {
   async search(query, { path = '.', ignoreCase = false } = {}) {
     const needle = ignoreCase ? query.toLowerCase() : query;
     const matches = [];
-    const scan = (file, content) => {
-      this.searchBytes += Buffer.byteLength(content);
+    const scan = (file, content, counted = false) => {
+      if (!counted) this.searchBytes += Buffer.byteLength(content);
       const lines = content.split('\n');
       for (let i = 0; i < lines.length && matches.length < LIMITS.searchMatches; i++)
         if ((ignoreCase ? lines[i].toLowerCase() : lines[i]).includes(needle))
           matches.push({ path: this.rel(file), line: i + 1, text: lines[i].slice(0, 300) });
     };
+    const scanStaged = file => {
+      const content = this.staged.get(file).content;
+      if (this.searchBytes + Buffer.byteLength(content) <= LIMITS.searchTotalBytes) scan(file, content);
+    };
     const budgetLeft = () => matches.length < LIMITS.searchMatches && this.searchBytes < LIMITS.searchTotalBytes;
     const scanFile = async file => {
-      if (this.staged.has(file)) return scan(file, this.staged.get(file).content);
+      if (this.staged.has(file)) return scanStaged(file);
       const info = await stat(file).catch(() => undefined);
       if (!info || info.size > LIMITS.searchFileBytes || this.searchBytes + info.size > LIMITS.searchTotalBytes) return;
-      try { scan(file, decodeText(await this.readVerified(file, this.rel(file)), this.rel(file))); } catch { /* skip unreadable */ }
+      this.searchBytes += info.size; // reserve before awaiting, so concurrent searches share the budget
+      try { scan(file, decodeText(await this.readVerified(file, this.rel(file)), this.rel(file)), true); } catch { /* skip unreadable */ }
     };
     const visit = async dir => {
       for (const item of await this.entries(dir)) {
@@ -226,10 +247,10 @@ export class Workspace {
         if (item.isDirectory()) { if (this.granted(full) || this.leadsToGrant(full)) await visit(full); continue; }
         if (item.isFile() && this.granted(full)) await scanFile(full);
       }
-      for (const created of this.stagedCreationsIn(dir)) if (budgetLeft()) scan(created, this.staged.get(created).content);
+      for (const created of this.stagedCreationsIn(dir)) if (budgetLeft()) scanStaged(created);
     };
     const staged = await this.matchWrite(resolve(this.root, path));
-    if (staged && this.staged.has(staged)) scan(staged, this.staged.get(staged).content);
+    if (staged && this.staged.has(staged)) scanStaged(staged);
     else {
       const start = await this.resolveRead(path).catch(async error => {
         const real = await realpath(resolve(this.root, path)).catch(() => { throw error; });
@@ -343,8 +364,9 @@ export class Workspace {
         if (s.original.present) await chmod(temp, (await stat(s.target)).mode & 0o7777);
       }
     } catch (error) {
-      await Promise.all(prepared.map(p => rm(p.temp, { force: true })));
-      throw Error(`Could not prepare changes (${error.message}). Nothing was applied.`);
+      const cleanup = await Promise.allSettled(prepared.map(p => rm(p.temp, { force: true })));
+      const leftovers = prepared.filter((p, k) => cleanup[k].status === 'rejected').map(p => this.rel(p.temp));
+      throw Error(`Could not prepare changes (${error.message}). Nothing was applied.` + (leftovers.length ? ` Temporary files left: ${leftovers.join(', ')}.` : ''));
     }
     const written = [];
     for (const [i, p] of prepared.entries()) {
@@ -352,9 +374,11 @@ export class Workspace {
         await unchanged(p); // re-check right before committing each file
         await rename(p.temp, p.target);
       } catch (error) {
-        await Promise.all(prepared.slice(i).map(q => rm(q.temp, { force: true })));
+        // Record what happened before cleanup, so a cleanup failure cannot hide a partial commit.
         this.applyState = written.length ? 'partial' : 'none';
-        throw Error(`Apply stopped at ${p.path} (${error.message}). Written: ${written.join(', ') || 'none'}. Not written: ${prepared.slice(i).map(q => q.path).join(', ')}.`);
+        const cleanup = await Promise.allSettled(prepared.slice(i).map(q => rm(q.temp, { force: true })));
+        const leftovers = prepared.slice(i).filter((q, k) => cleanup[k].status === 'rejected').map(q => this.rel(q.temp));
+        throw Error(`Apply stopped at ${p.path} (${error.message}). Written: ${written.join(', ') || 'none'}. Not written: ${prepared.slice(i).map(q => q.path).join(', ')}.` + (leftovers.length ? ` Temporary files left: ${leftovers.join(', ')}.` : ''));
       }
       written.push(p.path);
       this.log('apply', p.target, { bytes: Buffer.byteLength(p.content) });
