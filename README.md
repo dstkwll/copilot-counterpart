@@ -154,4 +154,6 @@ Live scripts use synthetic context, consume Copilot allowance, and never run in 
 - [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk): schema validation and stdio transport.
 - Design references (no code copied): [copilot-plugin-cc](https://github.com/wagnersza/copilot-plugin-cc) job control and [copilot-sdk-proxy](https://github.com/theblixguy/copilot-sdk-proxy) streaming/model discovery.
 
-Not affiliated with GitHub, OpenAI or Anthropic.
+## License
+
+[MIT](LICENSE). Not affiliated with GitHub, OpenAI or Anthropic.
