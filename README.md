@@ -180,6 +180,10 @@ Finished jobs are appended to `~/.local/state/copilot-counterpart/history.jsonl`
 - `copilot_feedback` also works for jobs from before a restart or from another host's server, and still rejects a contradictory second outcome.
 - History informs routing decisions but does not change routing automatically.
 
+### Audit log (optional)
+
+Set `COPILOT_COUNTERPART_AUDIT_LOG` to a file path to append every file, web and action access (with its job id) as one JSON line, mode `0600`. It is off by default. Unlike job history it records paths and URLs, so keep it local; it is meant for evaluations and debugging.
+
 ## Data and lifecycle
 
 Only send context you are authorized to share; never send secrets. Opaque provider metadata and encrypted reasoning are filtered from returned events. This is not a general redaction service.

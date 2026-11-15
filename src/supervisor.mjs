@@ -1,4 +1,5 @@
 import { randomUUID, createHash } from 'node:crypto';
+import { appendFileSync } from 'node:fs';
 
 const terminal = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
 const keptEvents = /^(assistant\.(message|usage)|tool\.|session\.(idle|error)|supervisor\.)/;
@@ -18,7 +19,8 @@ function publicEventData(event) {
 
 // SDK-independent job state machine. Each job owns a separate runtime.
 export class Supervisor {
-  constructor(factory, { maxActive = 2, maxJobs = 32, maxEvents = 512, history } = {}) {
+  constructor(factory, { maxActive = 2, maxJobs = 32, maxEvents = 512, history, auditLog = process.env.COPILOT_COUNTERPART_AUDIT_LOG } = {}) {
+    this.auditLog = auditLog || undefined; // optional JSONL file of every file, web and action access, for evaluation and debugging
     this.factory = factory;
     this.history = history; // optional durable, metadata-only record of finished jobs
     this.maxActive = maxActive;
@@ -32,6 +34,14 @@ export class Supervisor {
     const job = this.jobs.get(id);
     if (!job) throw new Error('Unknown job ID (jobs belong to this server process).');
     return job;
+  }
+
+  // Appends one access entry to the audit log, if configured. Synchronous so entries are
+  // on disk before the job reports completion; failures never affect the job.
+  audit(job, type, entry) {
+    if (!this.auditLog) return;
+    try { appendFileSync(this.auditLog, JSON.stringify({ at: new Date().toISOString(), jobId: job.id, type, ...entry }) + '\n', { mode: 0o600 }); }
+    catch (error) { process.stderr.write(`copilot-counterpart: audit log write failed: ${error.message}\n`); }
   }
 
   record(job, type, data = {}) {
@@ -70,9 +80,10 @@ export class Supervisor {
     const job = { id: randomUUID(), requestId, fingerprint, model, reasoningEffort, route, delegation, runtimeCatalog, workspace, web, actions, meta, usage: { inputTokens: 0, outputTokens: 0, events: 0 }, status: 'starting',
       createdAt: new Date().toISOString(), events: [], cursor: 0, waiters: new Set(), result: '' };
     this.jobs.set(job.id, job);
-    if (workspace) workspace.onAccess = access => this.record(job, 'supervisor.file_access', access);
-    if (web) web.onAccess = access => this.record(job, 'supervisor.web_access', access);
-    if (actions) actions.onAccess = access => this.record(job, 'supervisor.action', access);
+    const access = type => entry => { this.record(job, type, entry); this.audit(job, type, entry); };
+    if (workspace) workspace.onAccess = access('supervisor.file_access');
+    if (web) web.onAccess = access('supervisor.web_access');
+    if (actions) actions.onAccess = access('supervisor.action');
     const granted = [workspace && `files (read ${workspace.spec.read.length} path(s), stage ${workspace.spec.write.length} file(s))`,
       web && 'web reads', actions && `actions (${actions.names.join(', ')})`].filter(Boolean);
     const policy = [delegation ? 'bounded router delegation' : '', ...granted].filter(Boolean).join('; ')

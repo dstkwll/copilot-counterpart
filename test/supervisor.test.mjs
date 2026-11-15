@@ -200,3 +200,21 @@ test('wait returns a brief result at completion, or running at timeout', async (
   await assert.rejects(s.wait(j.jobId, 0), /1–240/);
   await s.close();
 });
+
+test('an optional audit log records each access with its job id', async () => {
+  const { mkdtemp, readFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'audit-'));
+  try {
+    const web = { freeze() {}, summary: () => ({}), tools: () => [], describe: () => '' };
+    const { start, supervisor } = fixture({ auditLog: join(dir, 'audit.jsonl') });
+    const j = start({ web });
+    web.onAccess({ op: 'fetch', url: 'https://example.com/jobs/1', status: 200 });
+    const [entry] = (await readFile(join(dir, 'audit.jsonl'), 'utf8')).trim().split('\n').map(l => JSON.parse(l));
+    assert.deepEqual([entry.jobId, entry.type, entry.op, entry.url], [j.jobId, 'supervisor.web_access', 'fetch', 'https://example.com/jobs/1']);
+    await supervisor.cancel(j.jobId);
+    const { start: plain, supervisor: s2 } = fixture({ auditLog: '' });
+    const w2 = { ...web }; const j2 = plain({ requestId: 'two', web: w2 }); w2.onAccess({ op: 'fetch', url: 'x' }); // no log configured: no throw
+    await s2.cancel(j2.jobId);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
