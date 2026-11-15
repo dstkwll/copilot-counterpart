@@ -156,6 +156,7 @@ export class Supervisor {
     job.status = status;
     job.error = error;
     job.workspace?.freeze(); job.web?.freeze(); job.actions?.freeze();
+    void job.actions?.cleanup?.().catch(() => {});
     clearTimeout(job.timer);
     this.record(job, 'supervisor.finished', { status, error });
     job.done?.();

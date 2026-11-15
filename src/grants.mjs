@@ -41,6 +41,7 @@ export async function buildGrants({ files, web, actions } = {}) {
     try { registry = await loadRegistry(); }
     catch (error) { throw Error(`Action registry is invalid: ${String(error.message).slice(0, 300)}`); }
     grants.actions = await Actions.create(actions, registry);
+    grants.actions.workspace = grants.workspace;
   }
   if (web) grants.web = new WebAccess();
   return grants;

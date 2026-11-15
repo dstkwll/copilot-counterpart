@@ -40,6 +40,16 @@ npm test
 copilot login   # only if you are not already authenticated
 ```
 
+Use `npm ci` without `--omit=optional`: the Copilot SDK ships its platform binary as an optional dependency. (pdf.js's optional native canvas is replaced by an empty stub through a package override, because text extraction doesn't need it.)
+
+**Recommended: run a separate runtime copy.** Register the server from a copy, not your checkout, so editing source never changes a running host by accident:
+
+```sh
+scripts/install-local.sh            # default: ~/.local/share/copilot-counterpart
+```
+
+It refuses uncommitted changes, runs the tests, backs up the current copy (keeping two), installs locked dependencies, runs the tests in the copy, records provenance in `INSTALLATION.md` and `source-sha256.json`, and updates installed copies of the skill. Rerun it after every update, then start new host sessions. The commands below use `$PWD/src/server.mjs`; with a runtime copy, point them at `~/.local/share/copilot-counterpart/src/server.mjs` instead.
+
 Register the server with each assistant using **absolute paths**. Registrations made before the rename may still use `COPILOT_SUPERVISOR_LEAD_FAMILY`, which is accepted as an alias. Set `COPILOT_COUNTERPART_LEAD_FAMILY` to the assistant's own model family so the router can pick a different family for reviews.
 
 ### Codex
@@ -154,7 +164,8 @@ The one exception to "no execution". The owner approves actions in `~/.config/co
 
 - A job lists the names it may use (`actions: ["render"]`), and the delegate calls `run_action({ name, args })`. It gets back the exit code and a capped tail of stdout and stderr.
 - Argument patterns use a restricted syntax: `^`, then literals, escapes such as `\d` and `\.`, and `[character classes]`, each optionally quantified, then `$`. No groups or `|`, and at most three quantifiers, so a pattern always matches the whole argument and can't backtrack catastrophically. Arguments are at most 200 characters. The command runs without a shell, so nothing can be chained. Only a minimal environment is passed (`PATH`, `HOME`, locale and any names the entry lists).
-- Actions see files on disk, not a job's staged edits. A script changed after the job started is refused. One action runs at a time, at most 20 per job.
+- By default actions see files on disk, not a job's staged edits. An entry with `"allowStaged": true` can also run with `run_action({ name, args, staged: true })`. That run uses a temporary copy of `cwd` (APFS clones where available, `.git` skipped, at most 50,000 files) with the job's staged edits written in. The approved script runs from the copy after the same hash check, so scripts that locate files relative to themselves see the copy too. Files the run creates or changes are listed as `@runN/...` paths, which the delegate can read with `workspace_read`, for example to check a rendered PDF. The copy is deleted when the job ends, and real files are never touched. Approve `allowStaged` only for commands that are safe on delegate-written input.
+- A script changed after the job started is refused. One action runs at a time, at most 20 per job.
 - No write grant may ever cover the registry or a registered script. This is checked when the job starts and again just before `copilot_apply`. If the registry exists but can't be read or parsed, every write grant is refused until it is fixed. `copilot_actions` lists the registry. To add an entry, get the owner's approval, then edit the file with your own tools.
 
 ## Recursive delegation (opt-in)

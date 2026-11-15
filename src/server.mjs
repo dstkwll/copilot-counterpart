@@ -28,7 +28,7 @@ export function createServer(supervisor, models = listModels, { leadFamily = res
     const tree = new DelegationTree(job.delegation, node => new CopilotRuntime(undefined, [tree.tool(node), ...grantTools(grants)], grants), job.runtimeCatalog, { leadFamily: job.route?.leadFamily });
     return tree;
   });
-  const server = new McpServer({ name: 'copilot-counterpart', version: '0.5.0' }, {
+  const server = new McpServer({ name: 'copilot-counterpart', version: '0.5.1' }, {
     instructions: 'Use copilot_delegate for authorized bounded reviews after meaningful changes, design sparring before consequential decisions, or well-specified analysis/code proposals. Skip trivial work. Routing selects model/effort; keep the primary assistant as decision-maker. Check project sharing authorization, supply only relevant non-secret context, poll progress, verify findings, and provide feedback. Never infer employer permission or launch unattended loops. Grant files only when the task needs them: list the smallest read set, and write paths only for edits you intend to review; staged edits reach disk only through copilot_changes then copilot_apply. One supervised escalation is permitted. copilot_orchestrate explicitly enables bounded recursive context-only delegation. The bridge never executes code or commands.'
   });
   router = new Router(supervisor, models, { leadFamily });

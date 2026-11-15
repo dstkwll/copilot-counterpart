@@ -134,3 +134,35 @@ test('a dangling registry symlink protects the file it would create', async () =
     await assert.rejects(buildGrants({ files: { root: f.base, write: ['repo/future.json'] } }), /action registry/);
   } finally { await f.cleanup(); }
 });
+
+test('staged runs use a temporary copy with staged edits; outputs are readable; disk is untouched', async () => {
+  const { stat: statFile, access } = await import('node:fs/promises');
+  const f = await fixture();
+  try {
+    const repo = join(f.base, 'repo');
+    await writeFile(join(repo, 'notes.md'), 'draft\n');
+    await mkdir(join(repo, '.git')); await writeFile(join(repo, '.git', 'HEAD'), 'ref\n');
+    const tool = join(repo, 'tools', 'upper.sh');
+    // Locates files relative to its own path, as many scripts do.
+    await writeFile(tool, '#!/bin/sh\ncd "$(dirname "$0")/.."\nmkdir -p out\ntr a-z A-Z < notes.md > out/notes.txt\n[ -d .git ] && echo "git copied" || echo "no git"\n');
+    await chmod(tool, 0o755);
+    const reg = JSON.parse(await readFile(f.registry, 'utf8'));
+    reg.actions.upper = { description: 'Uppercase notes', command: tool, cwd: repo, approved: 'test', allowStaged: true };
+    await writeFile(f.registry, JSON.stringify(reg));
+    const grants = await buildGrants({ files: { root: f.base, read: ['repo'], write: ['repo/notes.md'] }, actions: ['upper', 'render'] });
+    await grants.workspace.write('repo/notes.md', 'reviewed\n');
+    const run = await grants.actions.run('upper', [], { staged: true });
+    assert.equal(run.exitCode, 0, run.stderr);
+    assert.equal(run.stdout.trim(), 'no git');
+    assert.deepEqual(run.staged.applied, ['repo/notes.md']);
+    assert.deepEqual(run.staged.outputs.files, ['@run1/out/notes.txt']);
+    assert.equal((await grants.workspace.read('@run1/out/notes.txt')).content, 'REVIEWED\n');
+    await assert.rejects(grants.workspace.read('@run1/../../../etc/hosts'), /outside the run output|Not found/);
+    assert.equal(await readFile(join(repo, 'notes.md'), 'utf8'), 'draft\n');
+    await assert.rejects(access(join(repo, 'out')));
+    await assert.rejects(grants.actions.run('render', ['v1'], { staged: true }), /not approved to run on staged edits/);
+    const overlays = [...grants.actions.overlays];
+    grants.actions.freeze(); await grants.actions.cleanup();
+    for (const dir of overlays) await assert.rejects(statFile(dir));
+  } finally { await f.cleanup(); }
+});

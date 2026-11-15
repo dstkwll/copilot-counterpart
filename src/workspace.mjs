@@ -83,6 +83,7 @@ export class Workspace {
     this.readBytes = 0; this.searchBytes = 0;
     this.frozen = false; this.applyState = 'none'; this.applying = undefined;
     this.locks = new Map(); this.onAccess = undefined;
+    this.runRoots = new Map(); // @runN -> temporary action copy, readable only
   }
 
   check(absolute, label = absolute) {
@@ -147,7 +148,21 @@ export class Workspace {
     return { present: true, bytes, text: decodeText(bytes, label) };
   }
 
+  addRunRoot(alias, dir) { this.runRoots.set(alias, dir); }
+
+  // @runN/... paths read from a finished action's temporary copy (see run_action).
+  async resolveRunPath(path) {
+    const [alias, ...rest] = path.split('/');
+    const dir = this.runRoots.get(alias);
+    if (!dir) throw new Refusal(`Unknown run output: ${alias}.`);
+    const real = await realpath(resolve(dir, rest.join('/'))).catch(() => { throw new Refusal(`Not found: ${path}`); });
+    if (!inside(real, dir)) throw new Refusal(`Path is outside the run output: ${path}`);
+    if (isDenied(relative(dir, real))) throw new Refusal(`Path is blocked as sensitive: ${path}`);
+    return real;
+  }
+
   async resolveRead(path) {
+    if (path.startsWith('@run')) return this.resolveRunPath(path);
     const lexical = resolve(this.root, path);
     const target = await this.matchWrite(lexical);
     if (target && this.staged.has(target)) return target;
@@ -195,8 +210,9 @@ export class Workspace {
     const bytes = Buffer.byteLength(text);
     if (this.readBytes + bytes > LIMITS.totalReadBytes) throw new Refusal('Job read budget exhausted.');
     this.readBytes += bytes;
-    this.log('read', target, { bytes, staged: this.staged.has(target) });
-    return { path: this.rel(target), totalLines: lines.length, startLine, truncated, content: text };
+    const shown = path.startsWith('@run') ? path : this.rel(target);
+    this.onAccess?.({ op: 'read', path: shown, bytes, staged: this.staged.has(target) });
+    return { path: shown, totalLines: lines.length, startLine, truncated, content: text };
   }
 
   async entries(dir) {
