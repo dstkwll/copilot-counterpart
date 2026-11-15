@@ -12,7 +12,7 @@ test('MCP tools negotiate, validate and dispatch without GitHub requests', async
   const [a, b] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(a), client.connect(b)]);
   try {
-    assert.equal((await client.listTools()).tools.length, 14);
+    assert.equal((await client.listTools()).tools.length, 15);
     const models = await client.callTool({ name: 'copilot_models', arguments: {} });
     assert.match(models.content[0].text, /test-model/);
     const invalid = await client.callTool({ name: 'copilot_start', arguments: { prompt: 'x' } });

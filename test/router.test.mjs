@@ -96,8 +96,8 @@ test('feedback is recorded once and does not change routing', async () => {
   try {
     const a = await r.delegate(input); await tick();
     calls[0].emit({ type: 'session.idle', data: {} }); await tick();
-    assert.equal(r.feedback(a.jobId, 'unhelpful').outcome, 'unhelpful');
-    assert.throws(() => r.feedback(a.jobId, 'useful'), /contradictory/);
+    assert.equal((await r.feedback(a.jobId, 'unhelpful')).outcome, 'unhelpful');
+    await assert.rejects(r.feedback(a.jobId, 'useful'), /contradictory/);
     const b = await r.delegate({ ...input, requestId: 'r2' });
     assert.equal(b.model, 'gpt-6.1-sol');
   } finally { await s.close(); }

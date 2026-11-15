@@ -8,6 +8,7 @@ import { DelegationTree, treeLimits } from './tree.mjs';
 import { Router, delegateSchema, chooseRoute, LEAD_FAMILIES } from './router.mjs';
 import { grantSchema, buildGrants, grantTools } from './grants.mjs';
 import { loadRegistry } from './actions.mjs';
+import { History } from './history.mjs';
 
 // COPILOT_SUPERVISOR_LEAD_FAMILY is the pre-rename name, still accepted.
 export function resolveLeadFamily(value = process.env.COPILOT_COUNTERPART_LEAD_FAMILY ?? process.env.COPILOT_SUPERVISOR_LEAD_FAMILY) {
@@ -18,8 +19,11 @@ export function resolveLeadFamily(value = process.env.COPILOT_COUNTERPART_LEAD_F
   return undefined;
 }
 
-export function createServer(supervisor, models = listModels, { leadFamily = resolveLeadFamily() } = {}) {
+// history defaults to the durable store only for the real server; tests that inject a
+// supervisor get none unless they pass one.
+export function createServer(supervisor, models = listModels, { leadFamily = resolveLeadFamily(), history = supervisor ? undefined : new History() } = {}) {
   let router;
+  if (supervisor && history) supervisor.history = history;
   supervisor ??= new Supervisor(job => {
     const grants = { workspace: job.workspace, web: job.web, actions: job.actions };
     if (!job.delegation) return new CopilotRuntime(undefined, grantTools(grants), grants);
@@ -27,11 +31,11 @@ export function createServer(supervisor, models = listModels, { leadFamily = res
     // the lead and children form one diff), one fetch budget and one action budget.
     const tree = new DelegationTree(job.delegation, node => new CopilotRuntime(undefined, [tree.tool(node), ...grantTools(grants)], grants), job.runtimeCatalog, { leadFamily: job.route?.leadFamily });
     return tree;
+  }, { history });
+  const server = new McpServer({ name: 'copilot-counterpart', version: '0.6.0' }, {
+    instructions: 'Use copilot_delegate for authorized bounded reviews after meaningful changes, design sparring before consequential decisions, or well-specified analysis/code proposals. Skip trivial work. Routing selects model/effort; keep the primary assistant as decision-maker. Check project sharing authorization, supply only relevant non-secret context, poll progress, verify findings, and provide feedback. Never infer employer permission or launch unattended loops. Grant files only when the task needs them: list the smallest read set, and write paths only for edits you intend to review; staged edits reach disk only through copilot_changes then copilot_apply. Collect results with copilot_wait. web: true adds logged public reads; actions adds only owner-approved registry commands, never a shell. One supervised escalation is permitted. copilot_orchestrate explicitly enables bounded recursive delegation sharing the call\'s grants. copilot_history shows durable job outcomes and feedback.'
   });
-  const server = new McpServer({ name: 'copilot-counterpart', version: '0.5.1' }, {
-    instructions: 'Use copilot_delegate for authorized bounded reviews after meaningful changes, design sparring before consequential decisions, or well-specified analysis/code proposals. Skip trivial work. Routing selects model/effort; keep the primary assistant as decision-maker. Check project sharing authorization, supply only relevant non-secret context, poll progress, verify findings, and provide feedback. Never infer employer permission or launch unattended loops. Grant files only when the task needs them: list the smallest read set, and write paths only for edits you intend to review; staged edits reach disk only through copilot_changes then copilot_apply. One supervised escalation is permitted. copilot_orchestrate explicitly enables bounded recursive context-only delegation. The bridge never executes code or commands.'
-  });
-  router = new Router(supervisor, models, { leadFamily });
+  router = new Router(supervisor, models, { leadFamily, history: history ?? supervisor.history });
   const register = (name, description, inputSchema, handler) => server.registerTool(name,
     { description, inputSchema }, async args => {
       try { return { content: [{ type: 'text', text: JSON.stringify(await handler(args)) }] }; }
@@ -67,7 +71,7 @@ export function createServer(supervisor, models = listModels, { leadFamily = res
       const selected = catalog.find(m => m.id === route.model && (!m.policy || m.policy.state === 'enabled') && m.supportedReasoningEfforts?.includes(route.reasoningEffort));
       if (!selected) throw Error('Lead model/effort unavailable; no fallback.');
       const grants = await buildGrants(args);
-      const result = supervisor.start({ requestId: `tree:${args.requestId}`, prompt: args.prompt, model: route.model, reasoningEffort: route.reasoningEffort, route, delegation: args.limits, runtimeCatalog: catalog, timeoutSeconds: args.timeoutSeconds, ...grants });
+      const result = supervisor.start({ requestId: `tree:${args.requestId}`, prompt: args.prompt, model: route.model, reasoningEffort: route.reasoningEffort, route, delegation: args.limits, runtimeCatalog: catalog, timeoutSeconds: args.timeoutSeconds, ...grants, meta: { role: args.role, complexity: args.complexity, risk: args.risk } });
       return result;
     })();
     orchestrationRequests.set(args.requestId, { fingerprint, promise });
@@ -75,7 +79,10 @@ export function createServer(supervisor, models = listModels, { leadFamily = res
     promise.catch(() => { if (orchestrationRequests.get(args.requestId)?.promise === promise) orchestrationRequests.delete(args.requestId); });
     return promise;
   });
-  register('copilot_feedback', 'Record the orchestrator-verified outcome of a finished routed job (process-local). Does not send inference or change routing.', {
+  register('copilot_history', 'Durable, metadata-only history of finished jobs across restarts and hosts on this machine: recent jobs with feedback, and per-role, per-model stats (completion, feedback, average tokens and seconds). No prompts or results are stored. Read-only.', {
+    limit: z.number().int().min(1).max(200).default(20), role: z.string().max(32).optional(), model: z.string().max(128).optional(), sinceDays: z.number().int().min(1).max(3650).optional()
+  }, async args => history?.enabled ? history.query(args) : { enabled: false, note: 'History is off (COPILOT_COUNTERPART_HISTORY=off) or not configured.' });
+  register('copilot_feedback', 'Record the orchestrator-verified outcome of a finished job, in memory and in durable history (so it also works after a restart or from another host). Does not send inference or change routing.', {
     jobId, outcome: z.enum(['useful', 'unhelpful', 'inconclusive'])
   }, ({ jobId, outcome }) => router.feedback(jobId, outcome));
   register('copilot_start', 'Advanced: start a context-only job on an explicit model, bypassing routing. Sends supplied prompt to GitHub Copilot and consumes its allowance. Requires sharingAuthorized like the routed tools. Optional files (scoped reads, staged writes), web (public reads) and actions (pre-approved named commands) grants. Supply only task-relevant, non-secret context. Returns immediately; poll copilot_events until terminal. Reuse requestId only for identical retries.', {

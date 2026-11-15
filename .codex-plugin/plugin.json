@@ -1,6 +1,6 @@
 {
   "name": "copilot-counterpart",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Supervised GitHub Copilot reviews with live events, steering and cancellation.",
   "author": {
     "name": "copilot-counterpart contributors"

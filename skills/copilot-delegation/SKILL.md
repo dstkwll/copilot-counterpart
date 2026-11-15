@@ -53,7 +53,7 @@ Explain why delegation is being used before dispatch. After a successful dispatc
 
 At terminal status, report `completed`, `failed`, `cancelled`, or `timed out` accurately. For completed work, distinguish output received from findings verified, e.g. `Copilot completed: two findings received; one verified and fixed, one rejected.` Report dispatch failures too. Summarize material contribution and verification in the final answer; do not dump raw transcripts or produce fake tool receipts.
 
-Job IDs and feedback are process-local; a server restart loses that history. Each host (Codex, Claude, …) runs its own server process, so they do not share jobs. This skill does not create durable learning or hard cost caps, and staged edits are reviewed by you, not sandboxed execution. Respect a user's "do not delegate" instruction without calling inference tools.
+Live jobs are process-local: a server restart loses them, and each host (Codex, Claude, …) runs its own server. Finished-job metadata and feedback are durable and shared through `copilot_history`; check it when choosing between roles or models, or before escalating, and record `copilot_feedback` even for jobs from an earlier session. This skill does not create durable learning or hard cost caps, and staged edits are reviewed by you, not sandboxed execution. Respect a user's "do not delegate" instruction without calling inference tools.
 
 ## Leads that can delegate
 

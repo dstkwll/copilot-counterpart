@@ -90,7 +90,7 @@ for skill in "${SKILL_DIRS[@]:-}"; do
 done
 
 # Keep only the newest KEEP backups of this runtime.
-ls -1d "$PARENT/$NAME"-backup-* 2>/dev/null | sort | awk -v keep="$KEEP" '{ a[NR] = $0 } END { for (i = 1; i <= NR - keep; i++) print a[i] }' |
+{ ls -1d "$PARENT/$NAME"-backup-* 2>/dev/null || true; } | sort | awk -v keep="$KEEP" '{ a[NR] = $0 } END { for (i = 1; i <= NR - keep; i++) print a[i] }' |
   while read -r old; do rm -rf "$old"; echo "Removed old backup $old"; done
 
 echo "Installed v$VERSION (${COMMIT:0:7}) at $DIR. Start new host sessions to load it."

@@ -77,7 +77,7 @@ claude mcp add copilot-counterpart --scope user \
   -- "$(command -v node)" "$PWD/src/server.mjs"
 ```
 
-Each host starts its own server process. Jobs, request IDs and feedback are not shared between hosts.
+Each host starts its own server process. Live jobs and request IDs are not shared between hosts; job history and feedback are (see [job history](#job-history)).
 
 ### Skill (recommended)
 
@@ -172,11 +172,19 @@ The one exception to "no execution". The owner approves actions in `~/.config/co
 
 Failed orchestration requests that never started a job free their request ID. `copilot_orchestrate` starts a lead session that may call `delegate_task`, plus any tools the call's grants provide; children get the same grants. Each child is routed by the same router, inheriting the outer `leadFamily`. Select the lead explicitly (e.g. `model: "gpt-6-astra"`) or let the router choose. Defaults are eight nodes including the lead, depth two (configurable 0–3), 100,000 observed tokens, 32 usage events and a 300-second outer deadline. Token and usage thresholds are **soft, post-paid stops**, not spend caps. See [recursive delegation](docs/recursive-delegation.md).
 
+## Job history
+
+Finished jobs are appended to `~/.local/state/copilot-counterpart/history.jsonl` (mode `0600`; override the path with `COPILOT_COUNTERPART_HISTORY`, or set it to `off`). Every server process on the machine appends to the same file, so Codex and Claude share it, and it survives restarts. It holds metadata only: role, model, effort, lead family and routing flags, status, token usage, duration, which grants were used, and feedback. It never stores prompts, results or file contents. The file rotates at 5 MB, keeping one previous file.
+
+- `copilot_history({ limit?, role?, model?, sinceDays? })` returns recent jobs with their feedback, plus per-role, per-model stats: completed, failed, timed out, feedback counts, and average tokens and seconds.
+- `copilot_feedback` also works for jobs from before a restart or from another host's server, and still rejects a contradictory second outcome.
+- History informs routing decisions but does not change routing automatically.
+
 ## Data and lifecycle
 
 Only send context you are authorized to share; never send secrets. Opaque provider metadata and encrypted reasoning are filtered from returned events. This is not a general redaction service.
 
-Jobs and events live in memory in one MCP process. A restart loses job IDs and deduplication, and graceful shutdown terminates the runtimes it owns. The SDK may persist sessions and logs under `~/.copilot`, and `copilot_forget` doesn't delete them. Token usage is aggregated from observed usage events; it isn't an invoice, and missing events don't prove zero consumption.
+Live jobs and events live in memory in one MCP process; only the metadata above is persisted. A restart loses running jobs, events and deduplication, and graceful shutdown terminates the runtimes it owns. The SDK may persist sessions and logs under `~/.copilot`, and `copilot_forget` doesn't delete them. Token usage is aggregated from observed usage events; it isn't an invoice, and missing events don't prove zero consumption.
 
 ## Development
 

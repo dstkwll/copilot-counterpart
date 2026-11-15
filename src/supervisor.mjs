@@ -18,8 +18,9 @@ function publicEventData(event) {
 
 // SDK-independent job state machine. Each job owns a separate runtime.
 export class Supervisor {
-  constructor(factory, { maxActive = 2, maxJobs = 32, maxEvents = 512 } = {}) {
+  constructor(factory, { maxActive = 2, maxJobs = 32, maxEvents = 512, history } = {}) {
     this.factory = factory;
+    this.history = history; // optional durable, metadata-only record of finished jobs
     this.maxActive = maxActive;
     this.maxJobs = maxJobs;
     this.maxEvents = maxEvents;
@@ -52,7 +53,7 @@ export class Supervisor {
 
   list() { return [...this.jobs.values()].map(j => this.snapshot(j)); }
 
-  start({ requestId, prompt, model, reasoningEffort, route, timeoutSeconds = 300, delegation, runtimeCatalog, workspace, web, actions }) {
+  start({ requestId, prompt, model, reasoningEffort, route, timeoutSeconds = 300, delegation, runtimeCatalog, workspace, web, actions, meta }) {
     if (this.closed) throw new Error('Supervisor is shutting down.');
     if (!requestId || !prompt || prompt.length > 200000 || !model || timeoutSeconds < 1 || timeoutSeconds > 900)
       throw new Error('Invalid request: require requestId, model, bounded prompt and timeout (1–900 seconds).');
@@ -66,7 +67,7 @@ export class Supervisor {
       throw new Error('Active job limit reached. Wait or cancel an existing job.');
     if (this.jobs.size >= this.maxJobs)
       throw new Error('Job history is full. Forget a finished job before starting another.');
-    const job = { id: randomUUID(), requestId, fingerprint, model, reasoningEffort, route, delegation, runtimeCatalog, workspace, web, actions, usage: { inputTokens: 0, outputTokens: 0, events: 0 }, status: 'starting',
+    const job = { id: randomUUID(), requestId, fingerprint, model, reasoningEffort, route, delegation, runtimeCatalog, workspace, web, actions, meta, usage: { inputTokens: 0, outputTokens: 0, events: 0 }, status: 'starting',
       createdAt: new Date().toISOString(), events: [], cursor: 0, waiters: new Set(), result: '' };
     this.jobs.set(job.id, job);
     if (workspace) workspace.onAccess = access => this.record(job, 'supervisor.file_access', access);
@@ -157,6 +158,7 @@ export class Supervisor {
     job.error = error;
     job.workspace?.freeze(); job.web?.freeze(); job.actions?.freeze();
     void job.actions?.cleanup?.().catch(() => {});
+    void this.history?.recordJob(job);
     clearTimeout(job.timer);
     this.record(job, 'supervisor.finished', { status, error });
     job.done?.();
