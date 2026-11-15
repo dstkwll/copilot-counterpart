@@ -175,6 +175,27 @@ export class Supervisor {
       hasMore: (events.at(-1)?.cursor ?? after) < job.cursor };
   }
 
+  // Blocks until the job is terminal or the timeout passes, then returns only what a
+  // lead needs to act: no events, no route detail, no workspace grant echo.
+  async wait(id, timeoutMs) {
+    const job = this.get(id);
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 240000) throw new Error('Wait must be 1–240 seconds.');
+    const deadline = Date.now() + timeoutMs;
+    while (!terminal.has(job.status) && Date.now() < deadline) {
+      await new Promise(resolve => {
+        const wake = () => { clearTimeout(timer); job.waiters.delete(wake); resolve(); };
+        const timer = setTimeout(wake, deadline - Date.now());
+        job.waiters.add(wake);
+      });
+    }
+    const done = terminal.has(job.status);
+    const brief = { jobId: job.id, status: job.status, model: job.model, reasoningEffort: job.reasoningEffort,
+      crossFamily: job.route?.crossFamily, usage: job.usage };
+    if (done) Object.assign(brief, { result: job.result, resultTruncated: job.resultTruncated ?? false, error: job.error });
+    if (job.workspace) brief.staged = job.workspace.summary().staged.map(s => s.path);
+    return brief;
+  }
+
   async steer(id, prompt) {
     const job = this.get(id);
     if (job.status !== 'running') throw new Error('Only a running job can be steered.');

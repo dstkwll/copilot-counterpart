@@ -181,3 +181,22 @@ test('a long streamed answer adds one event, not one per token, and keeps audit 
   assert.equal(r.partial.length, 1000);
   await s.close();
 });
+
+test('wait returns a brief result at completion, or running at timeout', async () => {
+  const { supervisor: s, start, runtimes } = fixture();
+  const j = start(); await tick();
+  const early = await s.wait(j.jobId, 20);
+  assert.equal(early.status, 'running');
+  assert.equal(early.result, undefined);
+  const waiting = s.wait(j.jobId, 5000);
+  runtimes[0].emit({ type: 'assistant.message_delta', data: { messageId: 'm', deltaContent: 'x' } });
+  runtimes[0].emit({ type: 'assistant.message', data: { content: 'Final answer' } });
+  runtimes[0].emit({ type: 'session.idle', data: {} });
+  const done = await waiting;
+  assert.equal(done.status, 'completed');
+  assert.equal(done.result, 'Final answer');
+  assert.equal(done.events, undefined);
+  assert.equal(done.route, undefined);
+  await assert.rejects(s.wait(j.jobId, 0), /1–240/);
+  await s.close();
+});
