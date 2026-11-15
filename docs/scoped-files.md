@@ -17,7 +17,7 @@ The lead should read the diff either way before trusting the change, so direct w
 
 ## Limits
 
-256 KB per read, 4 MB read per job, 1 MB per staged file, 500 list entries, 200 search matches, 1 MB per searched file and 20 MB searched per job. Search is literal text, not regular expressions. Orchestration trees do not take `files`.
+256 KB per read, 4 MB read per job, 1 MB per staged file, 500 list entries, 200 search matches, 1 MB per searched file and 20 MB searched per job. Search is literal text, not regular expressions. Orchestration trees share one workspace across the lead and children. `.pdf` and `.docx` files are read as extracted text and cannot be staged.
 
 Search budgets are per job and reserved before each read, staged content included. Traversal descends only into granted directories and their ancestors.
 

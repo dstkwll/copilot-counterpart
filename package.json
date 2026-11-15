@@ -1,6 +1,6 @@
 {
   "name": "copilot-counterpart",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -14,6 +14,8 @@
   "dependencies": {
     "@github/copilot-sdk": "1.0.13",
     "@modelcontextprotocol/sdk": "1.30.0",
+    "@napi-rs/canvas": "file:./vendor/no-canvas",
+    "pdfjs-dist": "6.4.299",
     "zod": "4.5.4"
   },
   "description": "Local MCP server for supervised, context-only GitHub Copilot delegation with cross-family model routing.",
@@ -21,5 +23,8 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/dstkwll/copilot-counterpart.git"
+  },
+  "overrides": {
+    "@napi-rs/canvas": "$@napi-rs/canvas"
   }
 }

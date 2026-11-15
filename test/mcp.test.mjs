@@ -12,7 +12,7 @@ test('MCP tools negotiate, validate and dispatch without GitHub requests', async
   const [a, b] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(a), client.connect(b)]);
   try {
-    assert.equal((await client.listTools()).tools.length, 13);
+    assert.equal((await client.listTools()).tools.length, 14);
     const models = await client.callTool({ name: 'copilot_models', arguments: {} });
     assert.match(models.content[0].text, /test-model/);
     const invalid = await client.callTool({ name: 'copilot_start', arguments: { prompt: 'x' } });
@@ -134,5 +134,24 @@ test('routed job with files stages an edit; changes then apply writes it through
     assert.equal(await readFile(join(root, 'a.js'), 'utf8'), 'let x = 2;\n');
     const plain = await call('copilot_start', { requestId: 's1', model: 'gpt-6.1-sol', prompt: 'p', sharingAuthorized: true });
     assert.match((await call('copilot_changes', { jobId: plain.data.jobId })).data, /not granted files/);
+  } finally { await supervisor.close(); await client.close(); await server.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('orchestration accepts files, web and actions grants shared by the tree', async () => {
+  const { mkdtemp, writeFile, rm, realpath } = await import('node:fs/promises');
+  const { join } = await import('node:path'); const { tmpdir } = await import('node:os');
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'tree-ws-')));
+  await writeFile(join(root, 'a.md'), 'hello\n');
+  const supervisor = new Supervisor(() => ({ open: async () => ({ send: async () => {} }), close: async () => {} }));
+  const { server } = createServer(supervisor, async () => [{ id: 'gpt-6-astra', supportedReasoningEfforts: ['high'] }]);
+  const client = new Client({ name: 't', version: '1' }); const [a, b] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(a), client.connect(b)]);
+  try {
+    const r = await client.callTool({ name: 'copilot_orchestrate', arguments: { requestId: 'tw', prompt: 'x', model: 'gpt-6-astra', sharingAuthorized: true, files: { root, read: ['.'], write: ['a.md'] }, web: true } });
+    assert.equal(r.isError, undefined, r.content?.[0]?.text);
+    const job = supervisor.get(JSON.parse(r.content[0].text).jobId);
+    assert.ok(job.workspace && job.web);
+    assert.deepEqual(job.workspace.spec.write, ['a.md']);
+    assert.match(job.events[0].data.policy, /bounded router delegation; files .*; web reads; all other tools denied/);
   } finally { await supervisor.close(); await client.close(); await server.close(); await rm(root, { recursive: true, force: true }); }
 });

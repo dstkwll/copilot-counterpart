@@ -4,7 +4,7 @@ These instructions apply to this repository only. They work for any coding agent
 
 ## Boundaries to preserve
 
-- **Bounded tool surface.** Leaf jobs deny every tool unless the caller grants `files`, which exposes only the `workspace_*` tools in `src/workspace.mjs`: reads inside granted paths and staged writes the lead applies with `copilot_apply`. Orchestration sessions may expose only `delegate_task`, with shared tree limits. Never add shell, network, execution or direct-write capability, or widen the sensitive-path blocklist's exceptions, without an explicit design decision from the maintainer.
+- **Bounded tool surface.** Jobs deny every tool except what the call grants: `files` (`workspace_*` in `src/workspace.mjs`: scoped reads, PDF/Word text, staged writes applied only via `copilot_apply`), `web` (`web_get` in `src/web.mjs`: GET-only public reads, private addresses refused), and `actions` (`run_action` in `src/actions.mjs`: owner-registered commands only, no shell). Orchestration adds only `delegate_task`. Never add a shell, arbitrary execution, direct writes, write access to the action registry or its scripts, or widen the private-address or sensitive-path blocks, without an explicit design decision from the maintainer.
 - **Fail closed.** If the catalog, a model's policy, or effort support doesn't match, start no inference. Never silently pick an older-generation model.
 - **Authorization is an attestation.** `sharingAuthorized` stays a required literal `true`. Don't weaken it, default it, or infer it.
 - **No credentials, session files, private transcripts, `node_modules` or unredacted logs** in commits.

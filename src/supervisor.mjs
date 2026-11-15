@@ -9,7 +9,7 @@ function publicEventData(event) {
   const data = event.data ?? {};
   const fields = ['messageId', 'content', 'deltaContent', 'phase', 'toolCallId', 'toolName',
     'arguments', 'partialOutput', 'progressMessage', 'success', 'aborted', 'message', 'errorType',
-    'nodeId', 'parentNodeId', 'op', 'tool', 'path', 'bytes', 'staged', 'created', 'entries', 'matches', 'depth', 'effectiveModel', 'status', 'route', 'usage', 'model', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'cost'];
+    'nodeId', 'parentNodeId', 'op', 'tool', 'path', 'url', 'finalUrl', 'action', 'args', 'exitCode', 'timedOut', 'durationMs', 'bytes', 'staged', 'created', 'entries', 'matches', 'depth', 'effectiveModel', 'status', 'route', 'usage', 'model', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'cost'];
   const result = Object.fromEntries(fields.filter(k => data[k] !== undefined).map(k => [k, data[k]]));
   if (data.result) result.result = { content: data.result.content, detailedContent: data.result.detailedContent };
   if (data.error) result.error = { message: data.error.message };
@@ -44,7 +44,7 @@ export class Supervisor {
 
   snapshot(job) {
     return { jobId: job.id, status: job.status, model: job.model,
-      reasoningEffort: job.reasoningEffort, partial: job.partial?.text, route: job.route, delegation: job.delegation, workspace: job.workspace?.summary(), usage: job.usage, feedback: job.feedback,
+      reasoningEffort: job.reasoningEffort, partial: job.partial?.text, route: job.route, delegation: job.delegation, workspace: job.workspace?.summary(), web: job.web?.summary(), actions: job.actions?.summary(), usage: job.usage, feedback: job.feedback,
       sessionId: job.session?.sessionId, cursor: job.cursor,
       createdAt: job.createdAt, error: job.error, result: job.result,
       resultTruncated: job.resultTruncated ?? false };
@@ -52,11 +52,11 @@ export class Supervisor {
 
   list() { return [...this.jobs.values()].map(j => this.snapshot(j)); }
 
-  start({ requestId, prompt, model, reasoningEffort, route, timeoutSeconds = 300, delegation, runtimeCatalog, workspace }) {
+  start({ requestId, prompt, model, reasoningEffort, route, timeoutSeconds = 300, delegation, runtimeCatalog, workspace, web, actions }) {
     if (this.closed) throw new Error('Supervisor is shutting down.');
     if (!requestId || !prompt || prompt.length > 200000 || !model || timeoutSeconds < 1 || timeoutSeconds > 900)
       throw new Error('Invalid request: require requestId, model, bounded prompt and timeout (1–900 seconds).');
-    const fingerprint = createHash('sha256').update(JSON.stringify({ prompt, model, reasoningEffort, route, timeoutSeconds, delegation, files: workspace?.spec })).digest('hex');
+    const fingerprint = createHash('sha256').update(JSON.stringify({ prompt, model, reasoningEffort, route, timeoutSeconds, delegation, files: workspace?.spec, web: Boolean(web), actions: actions?.names })).digest('hex');
     const prior = [...this.jobs.values()].find(j => j.requestId === requestId);
     if (prior) {
       if (prior.fingerprint !== fingerprint) throw new Error('requestId already used with different inputs.');
@@ -66,13 +66,16 @@ export class Supervisor {
       throw new Error('Active job limit reached. Wait or cancel an existing job.');
     if (this.jobs.size >= this.maxJobs)
       throw new Error('Job history is full. Forget a finished job before starting another.');
-    const job = { id: randomUUID(), requestId, fingerprint, model, reasoningEffort, route, delegation, runtimeCatalog, workspace, usage: { inputTokens: 0, outputTokens: 0, events: 0 }, status: 'starting',
+    const job = { id: randomUUID(), requestId, fingerprint, model, reasoningEffort, route, delegation, runtimeCatalog, workspace, web, actions, usage: { inputTokens: 0, outputTokens: 0, events: 0 }, status: 'starting',
       createdAt: new Date().toISOString(), events: [], cursor: 0, waiters: new Set(), result: '' };
     this.jobs.set(job.id, job);
     if (workspace) workspace.onAccess = access => this.record(job, 'supervisor.file_access', access);
-    const policy = delegation ? 'context-only; bounded router delegation only'
-      : workspace ? `scoped files: read ${workspace.spec.read.length} path(s), stage ${workspace.spec.write.length} file(s); all other tools denied`
-      : 'context-only; all tools denied';
+    if (web) web.onAccess = access => this.record(job, 'supervisor.web_access', access);
+    if (actions) actions.onAccess = access => this.record(job, 'supervisor.action', access);
+    const granted = [workspace && `files (read ${workspace.spec.read.length} path(s), stage ${workspace.spec.write.length} file(s))`,
+      web && 'web reads', actions && `actions (${actions.names.join(', ')})`].filter(Boolean);
+    const policy = [delegation ? 'bounded router delegation' : '', ...granted].filter(Boolean).join('; ')
+      + (granted.length || delegation ? '; all other tools denied' : 'context-only; all tools denied');
     this.record(job, 'supervisor.started', { model, timeoutSeconds, policy });
     job.timer = setTimeout(() => void this.cancel(job.id, 'timed_out'), timeoutSeconds * 1000);
     job.task = this.run(job, prompt);
@@ -140,11 +143,11 @@ export class Supervisor {
   // supervisor.file_access events already record what happened, so keep only metadata
   // here; otherwise every events poll would ship file contents back to the lead.
   redactWorkspaceTool(job, type, data) {
-    if (!job.workspace || !type.startsWith('tool.')) return data;
+    if (!(job.workspace || job.web || job.actions) || !type.startsWith('tool.')) return data;
     job.workspaceCalls ??= new Set();
-    if (typeof data.toolName === 'string' && data.toolName.startsWith('workspace_')) job.workspaceCalls.add(data.toolCallId);
+    if (typeof data.toolName === 'string' && (data.toolName.startsWith('workspace_') || ['web_get', 'run_action'].includes(data.toolName))) job.workspaceCalls.add(data.toolCallId);
     if (!job.workspaceCalls.has(data.toolCallId)) return data;
-    const kept = { toolCallId: data.toolCallId, toolName: data.toolName, success: data.success, model: data.model, redacted: 'workspace content omitted; see supervisor.file_access' };
+    const kept = { toolCallId: data.toolCallId, toolName: data.toolName, success: data.success, model: data.model, redacted: 'content omitted; see supervisor.file_access, web_access or action' };
     return Object.fromEntries(Object.entries(kept).filter(([, v]) => v !== undefined));
   }
 
@@ -152,7 +155,7 @@ export class Supervisor {
     if (terminal.has(job.status)) return;
     job.status = status;
     job.error = error;
-    job.workspace?.freeze();
+    job.workspace?.freeze(); job.web?.freeze(); job.actions?.freeze();
     clearTimeout(job.timer);
     this.record(job, 'supervisor.finished', { status, error });
     job.done?.();

@@ -1,6 +1,6 @@
 # Copilot Counterpart
 
-A local [MCP](https://modelcontextprotocol.io) server that lets a coding assistant such as **Codex** or **Claude Code** hand bounded work to models in your **GitHub Copilot** subscription, with automatic model routing, live progress, steering and cancellation. Jobs are context-only by default; a job can also be granted scoped read access to named files and staged writes that the lead reviews before anything reaches disk.
+A local [MCP](https://modelcontextprotocol.io) server that lets a coding assistant such as **Codex** or **Claude Code** hand bounded work to models in your **GitHub Copilot** subscription, with automatic model routing, live progress, steering and cancellation. Jobs are context-only by default. A call can grant scoped file access (reads, PDF/Word text, and staged writes the lead reviews before anything reaches disk), read-only web access, and pre-approved named actions.
 
 It uses the official [GitHub Copilot SDK](https://github.com/github/copilot-sdk) and your existing `copilot login`. It is not an unofficial API proxy, and it never copies credentials.
 
@@ -18,10 +18,13 @@ The router picks the model and reasoning effort from the task's role, complexity
 ## Safety model
 
 - By default delegates receive only the context you put in the prompt. Every built-in and MCP tool and every permission request is denied, configuration/instruction discovery is disabled, and each job gets a fresh empty working directory. The adapter verifies the runtime's actual tool set before sending context.
-- No shell, web access or code execution, ever. File access exists only when a call grants it with `files` (see [scoped files](#scoped-files)): reads limited to named paths, writes staged in memory and applied only by the lead through `copilot_apply`.
+- Never a shell. Each capability exists only when the call grants it:
+  - `files` ([scoped files](#scoped-files)): reads limited to named paths, writes staged in memory and applied only by the lead through `copilot_apply`.
+  - `web: true` ([web reads](#web-reads)): GET-only reads of public pages and APIs; local and private-network addresses are refused; every fetch is logged.
+  - `actions` ([named actions](#named-actions)): only commands the owner approved in a registry, by name, with arguments matching each entry's patterns, run without a shell.
 - `sharingAuthorized: true` is required on every inference call. It is the orchestrator's attestation that the user or project permits sending that context to Copilot, not an independent policy check.
 - At most two active jobs, 32 retained jobs, 512 events per job, a five-minute default deadline (15 minute maximum), and one supervised escalation per job.
-- Opt-in recursive delegation (`copilot_orchestrate`) is bounded to eight nodes and depth three, and is still context-only.
+- Opt-in recursive delegation (`copilot_orchestrate`) is bounded to eight nodes and depth three; its lead and children share the call's grants.
 
 These are SDK-level restrictions, not an OS sandbox against a compromised SDK or runtime.
 
@@ -118,17 +121,45 @@ Pass `files` to `copilot_delegate` or `copilot_start`:
 ```
 
 - The delegate gets `workspace_read`, `workspace_list` and `workspace_search`, plus `workspace_write` and `workspace_edit` only when `write` is non-empty. They are custom tools; built-in file tools stay denied.
-- **Reads** are limited to the `read` paths (directories recursively) and the `write` files, and to UTF-8 text. Paths are resolved through symlinks and must stay inside `root`; files are opened without following symlinks, and hard-linked files are refused. Per-read, per-job and search size caps apply.
+- **Reads** are limited to the `read` paths (directories recursively) and the `write` files: UTF-8 text, plus the extracted text of `.pdf` (via pdf.js, without fonts, eval or rendering) and `.docx` files (each extraction runs in a worker thread with a 512 MB heap limit and a 30-second deadline), which can be read and searched but not edited. Paths are resolved through symlinks and must stay inside `root`; files are opened without following symlinks, and hard-linked files are refused. Per-read, per-job and search size caps apply.
 - **Sensitive paths are always refused**, even if granted, in any letter case: `.git`, `.ssh`, `.aws`, `.env*` (except `.example`/`.sample`/`.template`), keys and certificates, `.npmrc`/`.netrc`, `credentials*`, `secrets*`.
 - **Writes are staged**, never written by the delegate. Only exact `write` files can be edited or created. When the job finishes, call `copilot_changes` for a unified diff and a `changeSetHash` computed from the same snapshot, review it, then call `copilot_apply` with that hash. Apply refuses before writing anything if a file changed on disk after the job read it, prepares every file before committing, re-checks each one just before replacing it, and if a commit still fails midway reports exactly which files were written. It runs once per job.
 - Every access and refusal appears in the job's events as `supervisor.file_access`, and job status includes a `workspace` summary. File contents are stripped from the job's tool events, so polling events doesn't pull them into the lead's context.
-- File contents you grant are sent to Copilot like any other context, so `sharingAuthorized` covers them too. Grant the smallest set the task needs. `copilot_orchestrate` does not take `files`. Design notes: [scoped files](docs/scoped-files.md).
+- File contents you grant are sent to Copilot like any other context, so `sharingAuthorized` covers them too. Grant the smallest set the task needs. `copilot_orchestrate` takes `files` too: the lead and its children share one workspace, so all their staged edits form one diff. Design notes: [scoped files](docs/scoped-files.md).
 
 Applying a reviewed diff is cheap for the lead: it reads the diff instead of writing the code, and apply needs no re-typing.
 
+## Web reads
+
+Pass `web: true` to `copilot_delegate`, `copilot_start` or `copilot_orchestrate`. The delegate gets `web_get(url, maxChars?, offset?)`, which returns extracted text: HTML is converted to text, PDFs are extracted, JSON and plain text are returned as is. Long responses page with `offset`.
+
+- Any public host is allowed. Research is the main use, so there is no allowlist.
+- GET only, no cookies or credentials, `http`/`https` only. Hostnames are resolved and refused if any address is loopback, private, link-local, carrier-grade NAT, multicast or reserved (IPv4 or IPv6, including IPv4 embedded in IPv6). The connection is pinned to the checked address, and every redirect is checked again.
+- IPv6 counts as public only inside global unicast (`2000::/3`), excluding documentation, Teredo, 6to4 and ORCHID ranges; NAT64 and IPv4-mapped addresses are checked as IPv4.
+- 4 MB per response, an absolute 20-second deadline covering redirects and the body, at most 4 fetches at once, 60 fetches and 40 MB per job counted as bytes arrive. Redirect bodies are never read, and fetches still running when the job ends are aborted. Every fetch and refusal is logged as `supervisor.web_access`.
+- The remaining risk is a page that injects instructions into a delegate holding private context, which could then try to leak it through a URL. Every fetched URL is in the job log, so review it, and avoid combining `web: true` with sensitive file grants when a task doesn't need both.
+
+## Named actions
+
+The one exception to "no execution". The owner approves actions in `~/.config/copilot-counterpart/actions.json` (override with `COPILOT_COUNTERPART_ACTIONS`):
+
+```json
+{ "actions": { "render": {
+  "description": "Render a résumé version to PDF",
+  "command": "/abs/path/repo/tools/render.sh",
+  "args": [{ "name": "version", "pattern": "^v[0-9]+$" }],
+  "cwd": "/abs/path/repo", "timeoutSeconds": 120,
+  "approved": "2026-11-15 by the owner in conversation" } } }
+```
+
+- A job lists the names it may use (`actions: ["render"]`), and the delegate calls `run_action({ name, args })`. It gets back the exit code and a capped tail of stdout and stderr.
+- Argument patterns use a restricted syntax: `^`, then literals, escapes such as `\d` and `\.`, and `[character classes]`, each optionally quantified, then `$`. No groups or `|`, and at most three quantifiers, so a pattern always matches the whole argument and can't backtrack catastrophically. Arguments are at most 200 characters. The command runs without a shell, so nothing can be chained. Only a minimal environment is passed (`PATH`, `HOME`, locale and any names the entry lists).
+- Actions see files on disk, not a job's staged edits. A script changed after the job started is refused. One action runs at a time, at most 20 per job.
+- No write grant may ever cover the registry or a registered script. This is checked when the job starts and again just before `copilot_apply`. If the registry exists but can't be read or parsed, every write grant is refused until it is fixed. `copilot_actions` lists the registry. To add an entry, get the owner's approval, then edit the file with your own tools.
+
 ## Recursive delegation (opt-in)
 
-Failed orchestration requests that never started a job free their request ID. `copilot_orchestrate` starts a lead session that may call a single `delegate_task` tool. Each child is routed by the same router, inheriting the outer `leadFamily`. Select the lead explicitly (e.g. `model: "gpt-6-astra"`) or let the router choose. Defaults are eight nodes including the lead, depth two (configurable 0–3), 100,000 observed tokens, 32 usage events and a 300-second outer deadline. Token and usage thresholds are **soft, post-paid stops**, not spend caps. See [recursive delegation](docs/recursive-delegation.md).
+Failed orchestration requests that never started a job free their request ID. `copilot_orchestrate` starts a lead session that may call `delegate_task`, plus any tools the call's grants provide; children get the same grants. Each child is routed by the same router, inheriting the outer `leadFamily`. Select the lead explicitly (e.g. `model: "gpt-6-astra"`) or let the router choose. Defaults are eight nodes including the lead, depth two (configurable 0–3), 100,000 observed tokens, 32 usage events and a 300-second outer deadline. Token and usage thresholds are **soft, post-paid stops**, not spend caps. See [recursive delegation](docs/recursive-delegation.md).
 
 ## Data and lifecycle
 
