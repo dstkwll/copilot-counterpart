@@ -19,8 +19,7 @@ try {
   for (;;) {
     const update = await s.events(job.jobId, { after, waitMs: 10000 });
     for (const event of update.events) {
-      if (event.type === 'assistant.message_delta') process.stdout.write('.');
-      else console.log(JSON.stringify(event));
+      console.log(JSON.stringify(event));
     }
     after = update.nextCursor;
     if (!['starting', 'running'].includes(update.status) && !update.hasMore) {

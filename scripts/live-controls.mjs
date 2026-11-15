@@ -18,7 +18,7 @@ try {
       steered = true;
       console.log('PASS: live SDK accepted immediate steering. This checks delivery, not model compliance.');
     }
-    if (update.events.some(e => e.type === 'assistant.message_delta')) {
+    if (update.events.some(e => e.type === 'assistant.streaming')) {
       observed = true;
       const stopped = await s.cancel(job.jobId);
       if (stopped.status !== 'cancelled') throw new Error(`Cancellation raced completion: ${stopped.status}`);

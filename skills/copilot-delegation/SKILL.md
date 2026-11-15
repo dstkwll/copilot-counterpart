@@ -15,7 +15,7 @@ Delegates never get commands, shell or web access. By default they get only the 
 
 ## Granting files
 
-Pass `files: { root, read, write }` when the delegate needs to look around or edit, instead of pasting large context. Granted file contents are shared with Copilot, so the sharing authorization above must cover them.
+On `copilot_delegate` or `copilot_start`, pass `files: { root, read, write }` when the delegate needs to look around or edit, instead of pasting large context. `copilot_orchestrate` does not accept file grants; give its lead the context it needs. Granted file contents are shared with Copilot, so the sharing authorization above must cover them.
 
 - `read`: the smallest set of files or directories the task needs. Reads are logged.
 - `write`: only exact files you intend to change and are authorized to change in this task. Edits are staged, not written.

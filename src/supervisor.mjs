@@ -1,7 +1,8 @@
 import { randomUUID, createHash } from 'node:crypto';
 
 const terminal = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
-const keptEvents = /^(assistant\.(message|message_delta|usage)|tool\.|session\.(idle|error)|supervisor\.)/;
+const keptEvents = /^(assistant\.(message|usage)|tool\.|session\.(idle|error)|supervisor\.)/;
+const PARTIAL_CHARS = 1000;
 
 // Do not forward opaque provider metadata, encrypted reasoning or authentication fields.
 function publicEventData(event) {
@@ -43,7 +44,7 @@ export class Supervisor {
 
   snapshot(job) {
     return { jobId: job.id, status: job.status, model: job.model,
-      reasoningEffort: job.reasoningEffort, route: job.route, delegation: job.delegation, workspace: job.workspace?.summary(), usage: job.usage, feedback: job.feedback,
+      reasoningEffort: job.reasoningEffort, partial: job.partial?.text, route: job.route, delegation: job.delegation, workspace: job.workspace?.summary(), usage: job.usage, feedback: job.feedback,
       sessionId: job.session?.sessionId, cursor: job.cursor,
       createdAt: job.createdAt, error: job.error, result: job.result,
       resultTruncated: job.resultTruncated ?? false };
@@ -83,6 +84,20 @@ export class Supervisor {
       job.runtime = this.factory(job);
       job.session = await job.runtime.open(job.model, event => {
         if (terminal.has(job.status)) return;
+        // Token deltas are coalesced: one assistant.streaming event per message (which
+        // wakes long polls) plus a short tail in the snapshot. Recording every delta
+        // flooded pollers' context and evicted audit events from the bounded history;
+        // the complete text still arrives as assistant.message.
+        if (event.type === 'assistant.message_delta') {
+          const messageId = event.data?.messageId;
+          if (!job.partial || job.partial.messageId !== messageId) {
+            job.partial = { messageId, text: '' };
+            this.record(job, 'assistant.streaming', { messageId, phase: event.data?.phase });
+          }
+          job.partial.text = (job.partial.text + (event.data?.deltaContent ?? '')).slice(-PARTIAL_CHARS);
+          return;
+        }
+        if (event.type === 'assistant.message') job.partial = undefined;
         if (keptEvents.test(event.type)) this.record(job, event.type, this.redactWorkspaceTool(job, event.type, publicEventData(event)));
         if (event.type === 'assistant.usage') {
           job.usage.events++;

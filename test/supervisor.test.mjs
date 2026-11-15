@@ -20,11 +20,15 @@ test('streams before completion, preserves result, cleans runtime', async () => 
   const { supervisor: s, start, runtimes } = fixture();
   const j = start();
   await tick();
-  runtimes[0].emit({ type: 'assistant.message_delta', data: { deltaContent: 'Hello' } });
+  for (const d of ['Hel', 'lo']) runtimes[0].emit({ type: 'assistant.message_delta', data: { messageId: 'm1', deltaContent: d } });
+  const streaming = await s.events(j.jobId);
+  assert.equal(streaming.events.filter(e => e.type === 'assistant.streaming').length, 1);
+  assert.ok(!streaming.events.some(e => e.type === 'assistant.message_delta'));
+  assert.equal(streaming.partial, 'Hello');
   runtimes[0].emit({ type: 'assistant.message', data: { content: 'Interim', encrypted_content: 'private-provider-metadata', token: 'secret' } });
   const progress = await s.events(j.jobId);
   assert.equal(progress.status, 'running');
-  assert.ok(progress.events.some(e => e.type === 'assistant.message_delta'));
+  assert.equal(progress.partial, undefined);
   assert.equal(JSON.stringify(progress).includes('private-provider-metadata'), false);
   assert.equal(JSON.stringify(progress).includes('secret'), false);
   runtimes[0].emit({ type: 'assistant.message', data: { content: 'Finding' } });
@@ -73,9 +77,9 @@ test('event pagination reports dropped history and wakes long polls', async () =
   const j = start(); await tick();
   const after = s.list()[0].cursor;
   const waiting = s.events(j.jobId, { after, waitMs: 1000 });
-  runtimes[0].emit({ type: 'assistant.message_delta', data: { deltaContent: 'wake' } });
-  assert.equal((await waiting).events.length, 1);
-  for (let i = 0; i < 5; i++) runtimes[0].emit({ type: 'assistant.message_delta', data: { deltaContent: String(i) } });
+  runtimes[0].emit({ type: 'assistant.message_delta', data: { messageId: 'w', deltaContent: 'wake' } });
+  assert.equal((await waiting).events[0].type, 'assistant.streaming');
+  for (let i = 0; i < 5; i++) runtimes[0].emit({ type: 'assistant.message', data: { content: String(i) } });
   const first = await s.events(j.jobId, { limit: 1 });
   assert.equal(first.gap, true);
   assert.equal(first.hasMore, true);
@@ -164,4 +168,16 @@ test('apply refuses when runtime shutdown is unconfirmed', async () => {
   await supervisor.get(job.jobId).task;
   await assert.rejects(supervisor.apply(job.jobId, 'f'.repeat(64)), /shutdown is unconfirmed/);
   release();
+});
+
+test('a long streamed answer adds one event, not one per token, and keeps audit history', async () => {
+  const { supervisor: s, start, runtimes } = fixture({ maxEvents: 20 });
+  const j = start(); await tick();
+  runtimes[0].emit({ type: 'supervisor.file_access', data: { op: 'read', path: 'a.js' } });
+  for (let i = 0; i < 5000; i++) runtimes[0].emit({ type: 'assistant.message_delta', data: { messageId: 'big', deltaContent: 'x' } });
+  const r = await s.events(j.jobId, { limit: 100 });
+  assert.ok(r.events.some(e => e.type === 'supervisor.file_access'));
+  assert.equal(r.events.filter(e => e.type === 'assistant.streaming').length, 1);
+  assert.equal(r.partial.length, 1000);
+  await s.close();
 });
