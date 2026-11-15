@@ -83,6 +83,7 @@ export class Workspace {
     this.readBytes = 0; this.searchBytes = 0;
     this.frozen = false; this.applyState = 'none'; this.applying = undefined;
     this.locks = new Map(); this.onAccess = undefined;
+    this.guard = undefined; // a LeakGuard when the job also has web access
     this.runRoots = new Map(); // @runN -> temporary action copy, readable only
   }
 
@@ -211,6 +212,7 @@ export class Workspace {
     if (this.readBytes + bytes > LIMITS.totalReadBytes) throw new Refusal('Job read budget exhausted.');
     this.readBytes += bytes;
     const shown = path.startsWith('@run') ? path : this.rel(target);
+    this.guard?.add(text);
     this.onAccess?.({ op: 'read', path: shown, bytes, staged: this.staged.has(target) });
     return { path: shown, totalLines: lines.length, startLine, truncated, content: text };
   }
@@ -250,7 +252,7 @@ export class Workspace {
       const lines = content.split('\n');
       for (let i = 0; i < lines.length && matches.length < LIMITS.searchMatches; i++)
         if ((ignoreCase ? lines[i].toLowerCase() : lines[i]).includes(needle))
-          matches.push({ path: this.rel(file), line: i + 1, text: lines[i].slice(0, 300) });
+          { const line = lines[i].slice(0, 300); this.guard?.add(line); matches.push({ path: this.rel(file), line: i + 1, text: line }); }
     };
     const scanStaged = file => {
       const content = this.staged.get(file).content;

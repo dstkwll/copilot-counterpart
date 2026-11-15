@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { Workspace, filesSchema } from './workspace.mjs';
 import { WebAccess } from './web.mjs';
+import { LeakGuard } from './leakguard.mjs';
 import { Actions, loadRegistry, protectedPaths, registryPath, canonical } from './actions.mjs';
 
 // Shared schema fields for every tool that starts a job.
@@ -44,6 +45,8 @@ export async function buildGrants({ files, web, actions } = {}) {
     grants.actions.workspace = grants.workspace;
   }
   if (web) grants.web = new WebAccess();
+  // With both files and web, URLs carrying text the delegate read are refused.
+  if (grants.web && grants.workspace) grants.web.guard = grants.workspace.guard = new LeakGuard();
   return grants;
 }
 
