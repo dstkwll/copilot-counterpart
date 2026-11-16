@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setImmediate as tick } from 'node:timers/promises';
-import { Router, chooseRoute } from '../src/router.mjs';
+import { Router, chooseRoute, roleInstruction } from '../src/router.mjs';
 import { Supervisor } from '../src/supervisor.mjs';
 
 const catalog = ['gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'gpt-6-astra', 'claude-sonnet-5.5', 'claude-opus-5.5']
@@ -151,4 +151,14 @@ test('policy v3 preserves tier fallbacks, rejects legacy-only catalogs and enfor
   assert.equal(route({}, catalog, { parent: { ...parent, model: 'gpt-6-luna' } }).model, 'gpt-6.1-sol');
   for (const model of ['claude-opus-5.5', 'gpt-6-astra'])
     assert.throws(() => route({}, catalog, { parent: { ...parent, model } }), /ceiling/);
+});
+
+test('code proposals with writable files are told to stage edits, and to test only through granted actions', () => {
+  const workspace = { spec: { write: ['src/a.mjs'] } };
+  assert.match(roleInstruction('code_proposal'), /cannot edit files/);
+  assert.match(roleInstruction('code_proposal', { workspace: { spec: { write: [] } } }), /cannot edit files/);
+  const staged = roleInstruction('code_proposal', { workspace });
+  assert.match(staged, /workspace_write or workspace_edit/); assert.doesNotMatch(staged, /cannot edit files/); assert.match(staged, /cannot execute tests/);
+  assert.match(roleInstruction('code_proposal', { workspace, actions: { names: ['node-test'] } }), /run_action/);
+  assert.equal(roleInstruction('review', { workspace }), roleInstruction('review'));
 });
