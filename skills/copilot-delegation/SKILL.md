@@ -1,11 +1,28 @@
 ---
 name: copilot-delegation
-description: Use the Copilot Counterpart server for bounded independent reviews after meaningful changes, consequential design sparring, or well-specified analysis and code proposals. Skip trivial work and respect requests not to delegate.
+description: Use the Copilot Counterpart server for bounded independent reviews after meaningful changes, consequential design sparring, well-specified analysis and code proposals, or bulk reading split across parallel readers. Skip trivial work and respect requests not to delegate.
 ---
 
 # Supervised Copilot delegation
 
 You are the primary assistant (for example Codex or Claude): the user's thinking partner and final decision-maker. Delegate when an independent perspective or bounded piece of work outweighs the cost of briefing and verifying it. This is active-task assistance, not a scheduler or a mandatory review of every edit.
+
+## When delegation pays
+
+Delegate work whose result costs much more to produce than to check, and ask for a result you can check cheaply:
+
+- **Checkable returns:** facts, `file:line` pointers with excerpts, claims with URL and verbatim quote, or a diff with tests. You confirm them with a targeted search, by opening the cited lines, or by running the tests.
+- **Not conclusions you would redo:** if trusting a rating, verdict or summary means re-reading the sources, you pay twice. Keep that judgment yourself and delegate only the gathering.
+- **Not small tasks:** briefing and checking have a fixed cost. On an 8-document reading task, delegating cost more than doing it and found nothing extra.
+- **Bulk reading:** for dozens of documents, run parallel readers over fixed batches. Each reader returns one structured line per document, facts only and no fit judgments. Ask for the deciding fact itself (the required language, the stated level), not a label: an "AI work: yes" field once led a lead to shortlist a role the facts ruled out. Decide from the lines, and grep-check the facts each decision rests on. Readers may be cheap native subagents where the host has them, or Copilot `analysis` jobs, each with a file grant for its batch only.
+- **Code with tests:** for a well-specified change of about 20 lines or more in a project with tests, send one `code_proposal` with a read grant for the relevant source and tests and a write grant for the files the change needs. If the registry has a sandboxed test action with `allowStaged: true`, grant it so the delegate checks its own staged edits. Then review the diff, run the tests yourself and fix what remains. Expect it to take longer than writing the change yourself; write it yourself when speed matters more than spend. Don't use a cheaper native subagent as the writer: it saved little and wrote the weakest code.
+- **Reviews are different:** they buy an independent opinion, not savings. Judge them by verified issues you missed. Prefer the other model family (the router's default): same-family reviewers favored their own family's code and missed a defect the cross-family reviewer caught. Either reviewer can be wrong, so verify each finding.
+
+Evidence so far (Nov 2026, small samples):
+- **Bulk reading:** one rating eval, one run per setup. With 117 postings, cheap readers cost about 15% less in total and took half the time, with the same quality. Mid-tier readers cost more than reading alone.
+- **Code writing:** three real features of about 20, 60 and 150 lines from one repository, two runs per setup. Delegating with a test action cut the lead's cost by about 35%, 33% and 54%, with every run passing the hidden and edge-case tests. It took about 1.5 to 2.5 times as long on the larger two.
+- **Context:** the lead's peak context was smaller in both evals, but whether that helps quality in a long session is untested, so don't count it as a benefit yet.
+- **Untested:** open-ended research that ends in a synthesized conclusion.
 
 ## Scope and authorization
 
