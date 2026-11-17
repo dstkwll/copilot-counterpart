@@ -22,7 +22,7 @@ Evidence so far (Nov 2026, small samples):
 - **Bulk reading:** one rating eval, one run per setup. With 117 postings, cheap readers cost about 15% less in total and took half the time, with the same quality. Mid-tier readers cost more than reading alone.
 - **Code writing:** three real features of about 20, 60 and 150 lines from one repository, two runs per setup. Delegating with a test action cut the lead's cost by about 35%, 33% and 54%, with every run passing the hidden and edge-case tests. It took about 1.5 to 2.5 times as long on the larger two.
 - **Context:** the lead's peak context was smaller in both evals, but whether that helps quality in a long session is untested, so don't count it as a benefit yet.
-- **Untested:** open-ended research that ends in a synthesized conclusion.
+- **Web research:** three questions with answer keys, five setups, two runs each. With a search tool that returns focused excerpts, the lead researching alone was cheapest and fastest. Copilot or Haiku readers cost 20–85% more for the same answers, and the deep-research skill cost 3 to 8 times as much. Copilot searching and reading roughly broke even on the larger questions and quoted sources most faithfully. Research the web yourself unless the reading is whole documents (bulk reading above).
 
 ## Scope and authorization
 
